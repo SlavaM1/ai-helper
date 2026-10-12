@@ -1,0 +1,33 @@
+services:
+  backend:
+    build:
+      context: ./backend
+    environment:
+      AI_HELPER_DATABASE_URL: sqlite:////data/assistant.db
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
+      DEEPSEEK_BASE_URL: ${DEEPSEEK_BASE_URL:-https://api.deepseek.com}
+      DEFAULT_MODEL: ${DEFAULT_MODEL:-deepseek-flash}
+      TARGET_REPO_PATH: /repos/aurelSpa
+      AI_HELPER_AUTO_INDEX: ${AI_HELPER_AUTO_INDEX:-true}
+      FASTEMBED_CACHE_PATH: /model-cache
+    volumes:
+      - assistant_data:/data
+      - embedding_cache:/model-cache
+      - ${TARGET_REPO_HOST_PATH:-../aurelSpa}:/repos/aurelSpa:ro
+    ports:
+      - "127.0.0.1:${BACKEND_PORT:-8000}:8000"
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+    depends_on:
+      backend:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:${FRONTEND_PORT:-3000}:80"
+    restart: unless-stopped
+
+volumes:
+  assistant_data:
+  embedding_cache:
