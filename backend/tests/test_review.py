@@ -7,6 +7,7 @@ import httpx
 
 from app.config import Settings
 from app.review.engine import (
+    REVIEW_SYSTEM_PROMPT,
     CodeReviewAgent,
     PullRequestDiffService,
     ReviewContextBuilder,
@@ -197,8 +198,18 @@ def test_engine_retries_invalid_json_and_validates_lines() -> None:
         assert len(report.findings) == 1
         assert report.findings[0].line_start is None
         assert report.findings[0].permalink is not None
+        assert "all human-readable review fields in Russian" in REVIEW_SYSTEM_PROMPT
 
     asyncio.run(exercise())
+
+
+def test_github_comment_template_is_in_russian() -> None:
+    markdown = ReviewReportFormatter().markdown(make_report())
+
+    assert "# AI-ревью кода" in markdown
+    assert "## Возможные ошибки" in markdown
+    assert "**Предлагаемое исправление:**" in markdown
+    assert "## Review Statistics" not in markdown
 
 
 def test_empty_or_binary_diff_does_not_call_llm() -> None:

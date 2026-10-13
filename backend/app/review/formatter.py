@@ -7,21 +7,26 @@ from .schemas import FindingCategory, ReviewFinding, ReviewReport
 
 class ReviewReportFormatter:
     LABELS: ClassVar[dict[FindingCategory, str]] = {
-        FindingCategory.POTENTIAL_BUG: "Potential Bugs",
-        FindingCategory.ARCHITECTURE_ISSUE: "Architecture Issues",
-        FindingCategory.RECOMMENDATION: "Recommendations",
+        FindingCategory.POTENTIAL_BUG: "Возможные ошибки",
+        FindingCategory.ARCHITECTURE_ISSUE: "Архитектурные проблемы",
+        FindingCategory.RECOMMENDATION: "Рекомендации",
+    }
+    COMPLETENESS: ClassVar[dict[str, str]] = {
+        "complete": "полный анализ",
+        "partial": "частичный анализ",
+        "empty": "нет данных для анализа",
     }
 
     def markdown(self, report: ReviewReport) -> str:
         lines = [
-            "# AI Code Review",
+            "# AI-ревью кода",
             "",
-            f"**Repository:** {report.repository}  ",
-            f"**Pull Request:** #{report.pr_number}  ",
-            f"**Model:** {report.model}  ",
-            f"**Base / Head:** `{report.base_sha[:12]}` / `{report.head_sha[:12]}`",
+            f"**Репозиторий:** {report.repository}  ",
+            f"**Пул-реквест:** #{report.pr_number}  ",
+            f"**Модель:** {report.model}  ",
+            f"**Базовый / текущий коммит:** `{report.base_sha[:12]}` / `{report.head_sha[:12]}`",
             "",
-            "## Summary",
+            "## Итог",
             "",
             report.summary,
         ]
@@ -29,36 +34,38 @@ class ReviewReportFormatter:
             lines.extend(["", f"## {label}", ""])
             findings = [item for item in report.findings if item.category == category]
             if not findings:
-                lines.append("No supported findings in this category.")
+                lines.append("Подтверждённых замечаний в этой категории нет.")
             for finding in findings:
                 lines.extend(self._finding(finding))
         lines.extend(
             [
                 "",
-                "## Review Statistics",
+                "## Статистика ревью",
                 "",
-                f"- Files analyzed: {report.files_analyzed}/{report.files_total}",
-                f"- Findings: {len(report.findings)}",
-                f"- Model: `{report.model}`",
-                f"- Tokens: {report.total_tokens if report.total_tokens is not None else 'provider did not report'}",
-                f"- Duration: {report.elapsed_ms or 0} ms",
-                f"- Commit SHA: `{report.head_sha}`",
-                f"- Completeness: {report.analysis_completeness}",
+                f"- Проанализировано файлов: {report.files_analyzed}/{report.files_total}",
+                f"- Замечаний: {len(report.findings)}",
+                f"- Модель: `{report.model}`",
+                f"- Токены: {report.total_tokens if report.total_tokens is not None else 'провайдер не сообщил'}",
+                f"- Длительность: {report.elapsed_ms or 0} мс",
+                f"- SHA коммита: `{report.head_sha}`",
+                f"- Полнота: {self.COMPLETENESS.get(report.analysis_completeness, report.analysis_completeness)}",
             ]
         )
         if report.unreviewed_files:
-            lines.extend(["", "Unreviewed files: " + ", ".join(f"`{path}`" for path in report.unreviewed_files)])
+            lines.extend(
+                ["", "Файлы без анализа: " + ", ".join(f"`{path}`" for path in report.unreviewed_files)]
+            )
         lines.extend(
             [
                 "",
-                "> AI review is advisory and does not replace tests, security analysis, or human review.",
+                "> AI-ревью носит рекомендательный характер и не заменяет тесты, анализ безопасности и проверку человеком.",
             ]
         )
         return "\n".join(lines)
 
     @staticmethod
     def _finding(finding: ReviewFinding) -> list[str]:
-        location = finding.filename or "General context"
+        location = finding.filename or "Общий контекст"
         if finding.line_start:
             location += f":{finding.line_start}"
             if finding.line_end and finding.line_end != finding.line_start:
@@ -68,15 +75,15 @@ class ReviewReportFormatter:
         return [
             f"### [{finding.severity.value}] {finding.title}",
             "",
-            f"**Location:** {location}  ",
-            f"**Confidence:** {finding.confidence:.0%}",
+            f"**Расположение:** {location}  ",
+            f"**Уверенность:** {finding.confidence:.0%}",
             "",
             finding.description,
             "",
-            f"**Impact:** {finding.impact}",
+            f"**Последствия:** {finding.impact}",
             "",
-            f"**Evidence:** {finding.evidence}",
+            f"**Обоснование:** {finding.evidence}",
             "",
-            f"**Suggested fix:** {finding.suggested_fix}",
+            f"**Предлагаемое исправление:** {finding.suggested_fix}",
             "",
         ]
