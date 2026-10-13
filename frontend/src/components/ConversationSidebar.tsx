@@ -1,20 +1,24 @@
 import { useEffect, useRef, useState } from 'react'
 import type { Conversation } from '../types'
-import { CloseIcon, EditIcon, PlusIcon, SparkIcon, TrashIcon } from './Icons'
+import { ChatIcon, CloseIcon, EditIcon, PlusIcon, ReviewIcon, SparkIcon, TrashIcon } from './Icons'
+
+export type AppView = 'chat' | 'reviews'
 
 interface Props {
   conversations: Conversation[]
   activeId?: string
   open: boolean
   loading?: boolean
+  view: AppView
   onClose: () => void
+  onViewChange: (view: AppView) => void
   onCreate: () => void
   onSelect: (id: string) => void
   onRename: (id: string, title: string) => void
   onDelete: (conversation: Conversation) => void
 }
 
-export function ConversationSidebar({ conversations, activeId, open, loading, onClose, onCreate, onSelect, onRename, onDelete }: Props) {
+export function ConversationSidebar({ conversations, activeId, open, loading, view, onClose, onViewChange, onCreate, onSelect, onRename, onDelete }: Props) {
   const [editingId, setEditingId] = useState<string>()
   const [title, setTitle] = useState('')
   const inputRef = useRef<HTMLInputElement>(null)
@@ -43,6 +47,14 @@ export function ConversationSidebar({ conversations, activeId, open, loading, on
           <div><strong>Repo Assistant</strong><span>developer workspace</span></div>
           <button className="icon-button sidebar__close" onClick={onClose} aria-label="Закрыть"><CloseIcon /></button>
         </div>
+        <nav className="section-nav" aria-label="Разделы">
+          <button className={view === 'chat' ? 'is-active' : ''} type="button" onClick={() => { onViewChange('chat'); onClose() }}>
+            <ChatIcon /><span>Чат</span>
+          </button>
+          <button className={view === 'reviews' ? 'is-active' : ''} type="button" onClick={() => { onViewChange('reviews'); onClose() }}>
+            <ReviewIcon /><span>Code Reviews</span>
+          </button>
+        </nav>
         <button className="new-chat" type="button" onClick={onCreate} disabled={loading}>
           <PlusIcon /> <span>Новый диалог</span><kbd>⌘ K</kbd>
         </button>

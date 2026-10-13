@@ -22,3 +22,6 @@ export const SparkIcon = (props: IconProps) => <Icon {...props}><path d="m12 3 1
 export const RefreshIcon = (props: IconProps) => <Icon {...props}><path d="M20 7v5h-5M4 17v-5h5" /><path d="M6.1 8.5A7 7 0 0 1 18 6l2 6M18 15.5A7 7 0 0 1 6 18l-2-6" /></Icon>
 export const ExternalIcon = (props: IconProps) => <Icon {...props}><path d="M14 4h6v6M20 4l-9 9" /><path d="M18 13v6a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h6" /></Icon>
 export const AlertIcon = (props: IconProps) => <Icon {...props}><path d="M12 3 2.8 19h18.4L12 3Z" /><path d="M12 9v4M12 17h.01" /></Icon>
+export const ChatIcon = (props: IconProps) => <Icon {...props}><path d="M20 15a3 3 0 0 1-3 3H9l-5 3v-6a3 3 0 0 1-1-2V7a3 3 0 0 1 3-3h11a3 3 0 0 1 3 3v8Z" /></Icon>
+export const ReviewIcon = (props: IconProps) => <Icon {...props}><path d="M9 4h6M9 20h6M5 8v8M19 8v8" /><circle cx="5" cy="5" r="2" /><circle cx="19" cy="5" r="2" /><circle cx="5" cy="19" r="2" /><circle cx="19" cy="19" r="2" /><path d="m9 12 2 2 4-4" /></Icon>
+export const FilterIcon = (props: IconProps) => <Icon {...props}><path d="M4 5h16l-6 7v6l-4 2v-8L4 5Z" /></Icon>

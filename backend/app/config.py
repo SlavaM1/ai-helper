@@ -31,6 +31,18 @@ class Settings(BaseSettings):
     rag_token_budget: int = Field(default=5_000, ge=256, le=32_000)
     max_output_tokens: int = Field(default=2_048, ge=256, le=16_384)
     auto_index: bool = True
+    github_token: str = Field(
+        default="", validation_alias=AliasChoices("GITHUB_TOKEN", "AI_HELPER_GITHUB_TOKEN")
+    )
+    github_repository: str = Field(
+        default="SlavaM1/aurelSpa",
+        validation_alias=AliasChoices("GITHUB_REPOSITORY", "AI_HELPER_GITHUB_REPOSITORY"),
+    )
+    review_model: str | None = Field(
+        default=None, validation_alias=AliasChoices("REVIEW_MODEL", "AI_HELPER_REVIEW_MODEL")
+    )
+    review_max_parallel: int = Field(default=1, ge=1, le=4)
+    review_max_diff_chars: int = Field(default=100_000, ge=10_000, le=500_000)
 
     model_config = SettingsConfigDict(
         env_prefix="AI_HELPER_",

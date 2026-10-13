@@ -61,8 +61,10 @@ class DeepSeekClient:
             max_tokens=max_tokens,
         )
         usage = response.usage
+        if usage is None:
+            return response.choices[0].message.content or "", {}
         return response.choices[0].message.content or "", {
-            "input_tokens": usage.prompt_tokens if usage else 0,
-            "output_tokens": usage.completion_tokens if usage else 0,
-            "total_tokens": usage.total_tokens if usage else 0,
+            "input_tokens": usage.prompt_tokens,
+            "output_tokens": usage.completion_tokens,
+            "total_tokens": usage.total_tokens,
         }

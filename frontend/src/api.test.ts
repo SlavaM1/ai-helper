@@ -58,6 +58,79 @@ describe('API client', () => {
     ])).toEqual({ promptTokens: 350, completionTokens: 150, totalTokens: 500, requests: 5, cost: 0.07 })
   })
 
+  it('нормализует pull requests и вложенный последний review', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse([{
+      number: 42,
+      title: 'Protect webhook verification',
+      author: { login: 'ada' },
+      head_branch: 'fix/webhooks',
+      base_branch: 'main',
+      state: 'open',
+      updated_at: '2026-10-13T10:00:00Z',
+      html_url: 'https://github.com/acme/repo/pull/42',
+      head_sha: 'abcdef123456',
+      review_status: 'completed',
+      last_review: { id: 'review-42', pr_number: 42, status: 'completed', findings_count: 2 },
+    }]))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(api.getPullRequests()).resolves.toEqual([
+      expect.objectContaining({
+        number: 42,
+        author: 'ada',
+        headBranch: 'fix/webhooks',
+        baseBranch: 'main',
+        reviewStatus: 'completed',
+        lastReview: expect.objectContaining({ id: 'review-42', pullRequestNumber: 42, findingsCount: 2 }),
+      }),
+    ])
+    expect(fetchMock).toHaveBeenCalledWith('/api/pull-requests', expect.any(Object))
+  })
+
+  it('нормализует findings и sources подробного review', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse({
+      review_id: 'review/42',
+      pull_request_number: 42,
+      status: 'completed',
+      findings: [{
+        finding_id: 'f-1',
+        title: 'Unchecked signature',
+        description: 'Verify before parsing.',
+        severity: 'HIGH',
+        category: 'security',
+        file_path: 'src/webhook.ts',
+        line_start: 18,
+        recommendation: 'Validate the HMAC first.',
+      }],
+      sources: [{ file_path: 'src/webhook.ts', start_line: 18, github_url: 'https://github.com/acme/repo/blob/main/src/webhook.ts#L18' }],
+    })))
+
+    await expect(api.getReview('review/42')).resolves.toMatchObject({
+      id: 'review/42',
+      findings: [{ id: 'f-1', severity: 'high', category: 'security', filePath: 'src/webhook.ts', lineStart: 18, suggestion: 'Validate the HMAC first.' }],
+      sources: [{ path: 'src/webhook.ts', lineStart: 18 }],
+    })
+    expect(fetch).toHaveBeenCalledWith('/api/reviews/review%2F42', expect.any(Object))
+  })
+
+  it('вызывает review actions по контрактным endpoints', async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(jsonResponse({ id: 'r-1', pr_number: 7, status: 'pending' }))
+      .mockResolvedValueOnce(jsonResponse({ synced: 3 }))
+      .mockResolvedValueOnce(jsonResponse({ conversation_id: 'c-review', review_id: 'r-1' }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(api.runPullRequestReview(7)).resolves.toMatchObject({ id: 'r-1', status: 'pending' })
+    await expect(api.syncReviews()).resolves.toMatchObject({ synced: 3 })
+    await expect(api.discussReview('r-1')).resolves.toEqual({ conversationId: 'c-review', reviewId: 'r-1' })
+    expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
+      '/api/pull-requests/7/review',
+      '/api/reviews/sync',
+      '/api/reviews/r-1/discuss',
+    ])
+    expect(fetchMock.mock.calls.every(([, init]) => init.method === 'POST')).toBe(true)
+  })
+
   it('разбирает именованные и завершающие SSE-события POST chat', async () => {
     const body = [
       'event: token\ndata: {"delta":"Привет"}\n\n',

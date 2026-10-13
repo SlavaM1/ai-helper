@@ -1,4 +1,5 @@
 import type {
+  CodeReview,
   Conversation,
   HealthStatus,
   JsonRecord,
@@ -7,7 +8,12 @@ import type {
   MessageMetrics,
   ModelInfo,
   RagStatus,
+  PullRequest,
   RepositoryInfo,
+  ReviewDiscussion,
+  ReviewFinding,
+  ReviewSummary,
+  ReviewSyncResult,
   Source,
   StreamEventHandlers,
   SummaryInfo,
@@ -108,6 +114,89 @@ function normalizeSource(value: unknown): Source {
     score: number(item.score) ?? number(item.similarity),
     label: text(item.label) ?? text(item.title),
     raw: item,
+  }
+}
+
+function normalizeReviewSummary(value: unknown): ReviewSummary {
+  const item = isRecord(value) ? value : {}
+  const pullRequest = isRecord(item.pull_request) ? item.pull_request : {}
+  const findings = arrayPayload(item.findings, 'findings', 'items')
+  const severityCounts = findings.reduce<Record<string, number>>((counts, finding) => {
+    const severity = isRecord(finding) ? (text(finding.severity) ?? 'INFO').toUpperCase() : 'INFO'
+    counts[severity] = (counts[severity] ?? 0) + 1
+    return counts
+  }, {})
+  return {
+    id: String(item.id ?? item.review_id ?? ''),
+    pullRequestNumber: number(item.pull_request_number) ?? number(item.pr_number) ?? number(item.pullRequestNumber) ?? number(pullRequest.number) ?? 0,
+    status: text(item.status) ?? text(item.review_status) ?? text(item.state) ?? 'pending',
+    headSha: text(item.reviewed_head_sha) ?? text(item.head_sha) ?? text(item.headSha) ?? text(item.commit_sha),
+    summary: text(item.summary) ?? text(item.overview),
+    findingsCount: number(item.findings_count) ?? number(item.findingsCount) ?? (Array.isArray(item.findings) ? findings.length : undefined),
+    severityCounts,
+    model: text(item.model),
+    elapsedMs: number(item.elapsed_ms) ?? number(item.elapsedMs),
+    createdAt: text(item.created_at) ?? text(item.createdAt),
+    updatedAt: text(item.updated_at) ?? text(item.updatedAt),
+    completedAt: text(item.finished_at) ?? text(item.completed_at) ?? text(item.completedAt),
+    raw: item,
+  }
+}
+
+function normalizePullRequest(value: unknown): PullRequest {
+  const item = isRecord(value) ? value : {}
+  const author = isRecord(item.author) ? item.author : {}
+  const pullRequestNumber = number(item.number) ?? number(item.pull_request_number) ?? number(item.pr_number) ?? 0
+  const normalizedLastReview = isRecord(item.last_review) || isRecord(item.lastReview)
+    ? normalizeReviewSummary(item.last_review ?? item.lastReview)
+    : undefined
+  const lastReview = normalizedLastReview && !normalizedLastReview.pullRequestNumber
+    ? { ...normalizedLastReview, pullRequestNumber }
+    : normalizedLastReview
+  return {
+    number: pullRequestNumber,
+    title: text(item.title) ?? 'Untitled pull request',
+    author: text(item.author) ?? text(author.login) ?? text(author.name) ?? 'unknown',
+    headBranch: text(item.head_branch) ?? text(item.headBranch) ?? '',
+    baseBranch: text(item.base_branch) ?? text(item.baseBranch) ?? '',
+    state: text(item.state) ?? 'open',
+    updatedAt: text(item.updated_at) ?? text(item.updatedAt),
+    htmlUrl: text(item.html_url) ?? text(item.htmlUrl) ?? text(item.url),
+    headSha: text(item.head_sha) ?? text(item.headSha),
+    reviewStatus: text(item.review_status) ?? text(item.reviewStatus) ?? lastReview?.status,
+    lastReview,
+    raw: item,
+  }
+}
+
+function normalizeReviewFinding(value: unknown, index: number): ReviewFinding {
+  const item = isRecord(value) ? value : {}
+  const location = isRecord(item.location) ? item.location : {}
+  return {
+    id: String(item.id ?? item.finding_id ?? index),
+    title: text(item.title) ?? text(item.message) ?? 'Finding',
+    description: text(item.description) ?? text(item.details) ?? text(item.body) ?? text(item.message) ?? '',
+    severity: (text(item.severity) ?? 'info').toLowerCase(),
+    category: text(item.category) ?? text(item.type) ?? 'general',
+    filePath: text(item.file_path) ?? text(item.path) ?? text(item.filename) ?? text(item.file) ?? text(location.path),
+    lineStart: number(item.line_start) ?? number(item.start_line) ?? number(item.line) ?? number(location.line_start) ?? number(location.line),
+    lineEnd: number(item.line_end) ?? number(item.end_line) ?? number(location.line_end),
+    suggestion: text(item.suggestion) ?? text(item.recommendation) ?? text(item.suggested_fix),
+    impact: text(item.impact),
+    evidence: text(item.evidence),
+    permalink: text(item.permalink),
+    codeSnippet: text(item.code_snippet) ?? text(item.codeSnippet) ?? text(item.snippet) ?? text(item.code),
+    raw: item,
+  }
+}
+
+function normalizeReview(value: unknown): CodeReview {
+  const item = isRecord(value) ? value : {}
+  const review = isRecord(item.review) ? item.review : item
+  return {
+    ...normalizeReviewSummary(review),
+    findings: arrayPayload(review.findings, 'findings', 'items').map(normalizeReviewFinding),
+    sources: arrayPayload(review.sources, 'sources', 'items').map(normalizeSource),
   }
 }
 
@@ -296,6 +385,43 @@ export const api = {
       progress: number(item.progress),
       message: text(item.message),
       raw: item,
+    }
+  },
+
+  async getPullRequests(): Promise<PullRequest[]> {
+    const value = await request<unknown>('/pull-requests')
+    return arrayPayload(value, 'pull_requests', 'pullRequests', 'items', 'data').map(normalizePullRequest).filter((item) => item.number > 0)
+  },
+
+  async getReviews(): Promise<ReviewSummary[]> {
+    const value = await request<unknown>('/reviews')
+    return arrayPayload(value, 'reviews', 'items', 'data').map(normalizeReviewSummary).filter((item) => item.id)
+  },
+
+  async getReview(id: string): Promise<CodeReview> {
+    return normalizeReview(await request<unknown>(`/reviews/${encodeURIComponent(id)}`))
+  },
+
+  async runPullRequestReview(number: number): Promise<CodeReview> {
+    return normalizeReview(await request<unknown>(`/pull-requests/${number}/review`, { method: 'POST' }))
+  },
+
+  async syncReviews(): Promise<ReviewSyncResult> {
+    const value = await request<unknown>('/reviews/sync', { method: 'POST' })
+    const item = isRecord(value) ? value : {}
+    return {
+      synced: typeof item.synced === 'boolean' ? item.synced : number(item.synced_reviews) ?? number(item.synced) ?? number(item.synced_count) ?? number(item.count) ?? 0,
+      message: text(item.message),
+      raw: item,
+    }
+  },
+
+  async discussReview(id: string): Promise<ReviewDiscussion> {
+    const value = await request<unknown>(`/reviews/${encodeURIComponent(id)}/discuss`, { method: 'POST' })
+    const item = isRecord(value) ? value : {}
+    return {
+      conversationId: String(item.conversation_id ?? item.conversationId ?? ''),
+      reviewId: String(item.review_id ?? item.reviewId ?? id),
     }
   },
 }

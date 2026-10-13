@@ -47,12 +47,14 @@ class AgentOrchestrator:
         llm: DeepSeekClient,
         retriever: Any,
         mcp: Any,
+        review_context: dict[str, Any] | None = None,
     ) -> None:
         self.db = db
         self.settings = settings
         self.llm = llm
         self.retriever = retriever
         self.mcp = mcp
+        self.review_context = review_context
         self.conversations = ConversationService(db)
         self.context = ContextManager()
 
@@ -80,6 +82,14 @@ class AgentOrchestrator:
         use_git = project_mode and self._needs_git(question)
         use_rag = project_mode and (not use_git or self._needs_rag(question))
         tool_calls: list[dict[str, Any]] = []
+        if self.review_context:
+            tool_calls.append(
+                {
+                    "name": "active_code_review",
+                    "status": "success",
+                    "result": self.review_context,
+                }
+            )
         rag_results: list[Any] = []
 
         if use_rag:

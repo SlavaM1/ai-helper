@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import threading
 from contextlib import asynccontextmanager
@@ -14,17 +15,37 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from .agent import AgentOrchestrator, DeepSeekClient
+from .agent.orchestrator import _event
 from .config import get_settings
 from .crud import ConversationNotFoundError, ConversationService, RagService
 from .database import SessionLocal, get_db, init_db
 from .mcp_tools import GitMcpClient
+from .models import MessageRole
 from .rag import HybridRetriever, RagIndexer
-from .schemas import ConversationCreate, ConversationRead, ConversationUpdate
+from .review.engine import CodeReviewAgent, ReviewRAGService, parse_review_command
+from .review.formatter import ReviewReportFormatter
+from .review.github import GitHubApiError, GitHubPRClient
+from .review.schemas import PullRequestData
+from .review.service import (
+    ActiveReviewError,
+    ReviewHistoryService,
+    ReviewNotFoundError,
+    ReviewSyncService,
+)
+from .schemas import (
+    ConversationCreate,
+    ConversationRead,
+    ConversationUpdate,
+    MessageCreate,
+)
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
 llm = DeepSeekClient(settings.deepseek_api_key, settings.deepseek_base_url)
 _index_lock = threading.Lock()
+_review_semaphore = asyncio.Semaphore(settings.review_max_parallel)
+_review_jobs: set[asyncio.Task[Any]] = set()
+_review_formatter = ReviewReportFormatter()
 
 
 def _run_index() -> None:
@@ -59,7 +80,7 @@ async def lifespan(_: FastAPI):
 
 app = FastAPI(
     title="Developer AI Assistant API",
-    version="1.0.0",
+    version="2.0.0",
     description="DeepSeek agent with repository RAG and read-only Git MCP tools.",
     lifespan=lifespan,
 )
@@ -87,6 +108,63 @@ def _not_found(exc: Exception) -> HTTPException:
 
 def _message_payload(message: Any) -> dict[str, Any]:
     return AgentOrchestrator._message_payload(message)
+
+
+def _github() -> GitHubPRClient:
+    return GitHubPRClient(settings.github_token, settings.github_repository)
+
+
+def _review_agent(db: Session) -> CodeReviewAgent:
+    return CodeReviewAgent(
+        settings,
+        llm,
+        ReviewRAGService(db, HybridRetriever(db), settings),
+        GitMcpClient(settings.target_repo_path) if Path(settings.target_repo_path).is_dir() else None,
+    )
+
+
+def _pr_payload(pr: Any) -> dict[str, Any]:
+    reviews = sorted(pr.reviews, key=lambda item: item.created_at, reverse=True)
+    latest = reviews[0] if reviews else None
+    review_status = "not_reviewed"
+    if latest:
+        review_status = "outdated" if latest.reviewed_head_sha != pr.head_sha else latest.status
+    return {
+        "id": pr.id,
+        "repository": pr.repository,
+        "number": pr.number,
+        "title": pr.title,
+        "author": pr.author,
+        "base_branch": pr.base_branch,
+        "head_branch": pr.head_branch,
+        "base_sha": pr.base_sha,
+        "head_sha": pr.head_sha,
+        "state": pr.state,
+        "html_url": pr.html_url,
+        "github_updated_at": pr.github_updated_at,
+        "updated_at": pr.updated_at,
+        "review_status": review_status,
+        "last_review": ReviewHistoryService.serialize(latest) if latest else None,
+    }
+
+
+async def _execute_review(review_id: str, pull_request: PullRequestData) -> None:
+    async with _review_semaphore:
+        with SessionLocal() as db:
+            history = ReviewHistoryService(db)
+            try:
+                history.mark_running(review_id)
+                report = await _review_agent(db).review(pull_request)
+                history.complete(review_id, report)
+            except Exception as exc:
+                logger.exception("Review job failed for %s", review_id)
+                history.fail(review_id, str(exc))
+
+
+def _start_review_job(review_id: str, pull_request: PullRequestData) -> None:
+    task = asyncio.create_task(_execute_review(review_id, pull_request))
+    _review_jobs.add(task)
+    task.add_done_callback(_review_jobs.discard)
 
 
 @app.get("/api/health")
@@ -182,22 +260,100 @@ async def chat(conversation_id: str, data: ChatRequest, db: Db) -> StreamingResp
     repo = Path(settings.target_repo_path)
     if not repo.is_dir():
         raise HTTPException(status_code=503, detail="TARGET_REPO_PATH недоступен")
+    review_number = parse_review_command(data.message, settings.github_repository)
+    history = ReviewHistoryService(db)
+    active_review = history.conversation_review(conversation_id)
+    review_context = None
+    if active_review and active_review.status == "completed":
+        serialized = history.serialize(active_review)
+        review_context = {
+            "review_id": active_review.id,
+            "repository": serialized.get("repository"),
+            "pr_number": serialized.get("pr_number"),
+            "head_sha": active_review.reviewed_head_sha,
+            "summary": active_review.summary,
+            "findings": serialized.get("findings", [])[:20],
+        }
     orchestrator = AgentOrchestrator(
         db,
         settings,
         llm,
         HybridRetriever(db),
         GitMcpClient(repo),
+        review_context=review_context,
     )
 
     async def events():
         try:
-            async for item in orchestrator.chat(conversation_id, data.message):
-                yield item
+            if review_number:
+                number = review_number
+                service = ConversationService(db)
+                conversation = service.require(conversation_id)
+                service.add_message(
+                    conversation_id, MessageCreate(role=MessageRole.USER, content=data.message.strip())
+                )
+                yield _event("status", {"type": "status", "stage": "Getting PR"})
+                github = _github()
+                try:
+                    pull_request = await github.get_pull_request(number)
+                finally:
+                    await github.close()
+                yield _event("status", {"type": "status", "stage": "Fetching diff"})
+                pr = history.upsert_pull_request(pull_request)
+                try:
+                    review = history.create_review(
+                        pr,
+                        source="manual",
+                        model=settings.review_model or conversation.model,
+                    )
+                except ActiveReviewError as exc:
+                    review = history.require(str(exc))
+                history.mark_running(review.id)
+                history.link_conversation(conversation_id, review.id)
+                yield _event("status", {"type": "status", "stage": "Retrieving project context"})
+                yield _event("status", {"type": "status", "stage": "AI analysis"})
+                report = await _review_agent(db).review(pull_request, model=conversation.model)
+                history.complete(review.id, report)
+                yield _event("status", {"type": "status", "stage": "Finalizing review"})
+                content = _review_formatter.markdown(report)
+                assistant = service.add_message(
+                    conversation_id,
+                    MessageCreate(
+                        role=MessageRole.ASSISTANT,
+                        content=content,
+                        model=report.model,
+                        input_tokens=report.prompt_tokens,
+                        output_tokens=report.completion_tokens,
+                        total_tokens=report.total_tokens,
+                        tokens_estimated=False,
+                        total_ms=report.elapsed_ms,
+                        llm_ms=report.elapsed_ms,
+                        sources=[item.model_dump(exclude={"content"}) for item in report.sources],
+                        rag_chunks=len(report.sources),
+                        tools=[{"name": "github_pull_request", "status": "success", "result": {"number": number}}],
+                    ),
+                )
+                yield _event("delta", {"type": "delta", "delta": content})
+                yield _event(
+                    "metrics",
+                    {
+                        "type": "metrics",
+                        "metrics": {
+                            "model": report.model,
+                            "input_tokens": report.prompt_tokens,
+                            "output_tokens": report.completion_tokens,
+                            "total_tokens": report.total_tokens,
+                            "latency_ms": report.elapsed_ms,
+                            "rag_chunks": len(report.sources),
+                        },
+                    },
+                )
+                yield _event("done", {"type": "done", "message": _message_payload(assistant)})
+            else:
+                async for item in orchestrator.chat(conversation_id, data.message):
+                    yield item
         except Exception as exc:
             logger.exception("Agent request failed")
-            import json
-
             payload = json.dumps({"type": "error", "message": str(exc)}, ensure_ascii=False)
             yield f"event: error\ndata: {payload}\n\n"
 
@@ -214,6 +370,114 @@ async def repository() -> Any:
         return await GitMcpClient(settings.target_repo_path).call("git_repo_info")
     except Exception as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
+@app.get("/api/pull-requests")
+async def pull_requests(db: Db) -> list[dict[str, Any]]:
+    github = _github()
+    try:
+        for item in await github.list_pull_requests("open"):
+            ReviewHistoryService(db).upsert_pull_request(item)
+    except GitHubApiError as exc:
+        if not ReviewHistoryService(db).list_pull_requests():
+            raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+        logger.warning("Using cached pull requests after GitHub error: %s", exc)
+    finally:
+        await github.close()
+    return [_pr_payload(item) for item in ReviewHistoryService(db).list_pull_requests()]
+
+
+@app.get("/api/pull-requests/{number}")
+async def pull_request(number: int, db: Db) -> dict[str, Any]:
+    github = _github()
+    try:
+        data = await github.get_pull_request(number)
+    except GitHubApiError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+    finally:
+        await github.close()
+    item = ReviewHistoryService(db).upsert_pull_request(data)
+    payload = _pr_payload(item)
+    payload["files"] = [file.model_dump() for file in data.files]
+    return payload
+
+
+@app.get("/api/pull-requests/{number}/reviews")
+def pull_request_reviews(number: int, db: Db) -> list[dict[str, Any]]:
+    return [
+        ReviewHistoryService.serialize(item)
+        for item in ReviewHistoryService(db).list()
+        if item.pull_request.number == number
+    ]
+
+
+@app.post("/api/pull-requests/{number}/review", status_code=202)
+async def run_pull_request_review(number: int, db: Db) -> dict[str, Any]:
+    github = _github()
+    try:
+        data = await github.get_pull_request(number)
+    except GitHubApiError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+    finally:
+        await github.close()
+    history = ReviewHistoryService(db)
+    pr = history.upsert_pull_request(data)
+    try:
+        review = history.create_review(
+            pr, source="manual", model=settings.review_model or settings.default_model
+        )
+    except ActiveReviewError as exc:
+        review = history.require(str(exc))
+        return history.serialize(review)
+    _start_review_job(review.id, data)
+    return history.serialize(review)
+
+
+@app.get("/api/reviews")
+def reviews(db: Db) -> list[dict[str, Any]]:
+    return [ReviewHistoryService.serialize(item) for item in ReviewHistoryService(db).list()]
+
+
+@app.get("/api/reviews/{review_id}")
+def review(review_id: str, db: Db) -> dict[str, Any]:
+    try:
+        return ReviewHistoryService.serialize(ReviewHistoryService(db).require(review_id))
+    except ReviewNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Review not found") from exc
+
+
+@app.get("/api/reviews/{review_id}/findings")
+def review_findings(review_id: str, db: Db) -> list[dict[str, Any]]:
+    try:
+        item = ReviewHistoryService(db).require(review_id)
+    except ReviewNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Review not found") from exc
+    return ReviewHistoryService.serialize(item)["findings"]
+
+
+@app.post("/api/reviews/{review_id}/discuss", status_code=201)
+def discuss_review(review_id: str, db: Db) -> dict[str, str]:
+    history = ReviewHistoryService(db)
+    try:
+        review_item = history.require(review_id)
+    except ReviewNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Review not found") from exc
+    conversation = ConversationService(db).create(
+        ConversationCreate(title=f"Review PR #{review_item.pull_request.number}")
+    )
+    history.link_conversation(conversation.id, review_item.id)
+    return {"conversation_id": conversation.id, "review_id": review_item.id}
+
+
+@app.post("/api/reviews/sync")
+async def sync_reviews(db: Db) -> dict[str, Any]:
+    github = _github()
+    try:
+        return await ReviewSyncService(db, github).sync()
+    except GitHubApiError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+    finally:
+        await github.close()
 
 
 @app.get("/api/mcp/tools")

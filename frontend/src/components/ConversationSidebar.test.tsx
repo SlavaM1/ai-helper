@@ -11,16 +11,24 @@ const conversations = [
 function setup() {
   const callbacks = {
     onClose: vi.fn(),
+    onViewChange: vi.fn(),
     onCreate: vi.fn(),
     onSelect: vi.fn(),
     onRename: vi.fn(),
     onDelete: vi.fn(),
   }
-  render(<ConversationSidebar conversations={conversations} activeId="1" open loading={false} {...callbacks} />)
+  render(<ConversationSidebar conversations={conversations} activeId="1" open loading={false} view="chat" {...callbacks} />)
   return callbacks
 }
 
 describe('ConversationSidebar', () => {
+  it('открывает раздел code reviews', async () => {
+    const callbacks = setup()
+    await userEvent.click(screen.getByRole('button', { name: 'Code Reviews' }))
+    expect(callbacks.onViewChange).toHaveBeenCalledWith('reviews')
+    expect(callbacks.onClose).toHaveBeenCalled()
+  })
+
   it('запускает создание нового диалога', async () => {
     const callbacks = setup()
     await userEvent.click(screen.getByRole('button', { name: /новый диалог/i }))

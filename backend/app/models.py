@@ -190,3 +190,151 @@ class IndexState(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utc_now, onupdate=utc_now
     )
+
+
+class PullRequest(Base):
+    __tablename__ = "pull_requests"
+    __table_args__ = (
+        UniqueConstraint("repository", "number", name="uq_pull_request_repository_number"),
+        Index("ix_pull_requests_updated", "updated_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_uuid)
+    repository: Mapped[str] = mapped_column(String(255), nullable=False)
+    number: Mapped[int] = mapped_column(Integer, nullable=False)
+    title: Mapped[str] = mapped_column(Text, nullable=False)
+    description: Mapped[str | None] = mapped_column(Text)
+    author: Mapped[str] = mapped_column(String(255), nullable=False)
+    base_branch: Mapped[str] = mapped_column(String(255), nullable=False)
+    head_branch: Mapped[str] = mapped_column(String(255), nullable=False)
+    base_sha: Mapped[str] = mapped_column(String(64), nullable=False)
+    head_sha: Mapped[str] = mapped_column(String(64), nullable=False)
+    state: Mapped[str] = mapped_column(String(32), nullable=False)
+    html_url: Mapped[str] = mapped_column(Text, nullable=False)
+    additions: Mapped[int] = mapped_column(Integer, default=0)
+    deletions: Mapped[int] = mapped_column(Integer, default=0)
+    changed_files: Mapped[int] = mapped_column(Integer, default=0)
+    github_updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    synced_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now)
+
+    reviews: Mapped[list["CodeReview"]] = relationship(back_populates="pull_request")
+
+
+class CodeReview(Base):
+    __tablename__ = "code_reviews"
+    __table_args__ = (
+        Index("ix_code_reviews_pr_created", "pull_request_id", "created_at"),
+        Index("ix_code_reviews_status", "status"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_uuid)
+    pull_request_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("pull_requests.id", ondelete="CASCADE"), nullable=False
+    )
+    source: Mapped[str] = mapped_column(String(32), nullable=False)
+    external_id: Mapped[str | None] = mapped_column(String(128), unique=True)
+    reviewed_head_sha: Mapped[str] = mapped_column(String(64), nullable=False)
+    base_sha: Mapped[str] = mapped_column(String(64), nullable=False)
+    model: Mapped[str] = mapped_column(String(255), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), default="pending")
+    summary: Mapped[str | None] = mapped_column(Text)
+    analysis_completeness: Mapped[str] = mapped_column(String(32), default="complete")
+    files_analyzed: Mapped[int] = mapped_column(Integer, default=0)
+    files_total: Mapped[int] = mapped_column(Integer, default=0)
+    unreviewed_files: Mapped[list[str]] = mapped_column(JSON, default=list)
+    prompt_tokens: Mapped[int | None] = mapped_column(Integer)
+    completion_tokens: Mapped[int | None] = mapped_column(Integer)
+    aggregation_tokens: Mapped[int | None] = mapped_column(Integer)
+    total_tokens: Mapped[int | None] = mapped_column(Integer)
+    elapsed_ms: Mapped[int | None] = mapped_column(Integer)
+    error: Mapped[str | None] = mapped_column(Text)
+    github_comment_id: Mapped[int | None] = mapped_column(Integer)
+    github_comment_url: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    pull_request: Mapped[PullRequest] = relationship(back_populates="reviews")
+    findings: Mapped[list["ReviewFinding"]] = relationship(
+        back_populates="review", cascade="all, delete-orphan", passive_deletes=True
+    )
+    sources: Mapped[list["ReviewSource"]] = relationship(
+        back_populates="review", cascade="all, delete-orphan", passive_deletes=True
+    )
+    runs: Mapped[list["ReviewRun"]] = relationship(
+        back_populates="review", cascade="all, delete-orphan", passive_deletes=True
+    )
+
+
+class ReviewFinding(Base):
+    __tablename__ = "review_findings"
+    __table_args__ = (Index("ix_review_findings_review_severity", "review_id", "severity"),)
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    review_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("code_reviews.id", ondelete="CASCADE"), nullable=False
+    )
+    title: Mapped[str] = mapped_column(Text, nullable=False)
+    category: Mapped[str] = mapped_column(String(64), nullable=False)
+    severity: Mapped[str] = mapped_column(String(16), nullable=False)
+    description: Mapped[str] = mapped_column(Text, nullable=False)
+    impact: Mapped[str] = mapped_column(Text, nullable=False)
+    evidence: Mapped[str] = mapped_column(Text, nullable=False)
+    filename: Mapped[str | None] = mapped_column(Text)
+    line_start: Mapped[int | None] = mapped_column(Integer)
+    line_end: Mapped[int | None] = mapped_column(Integer)
+    suggested_fix: Mapped[str] = mapped_column(Text, nullable=False)
+    permalink: Mapped[str | None] = mapped_column(Text)
+    confidence: Mapped[float] = mapped_column(nullable=False)
+
+    review: Mapped[CodeReview] = relationship(back_populates="findings")
+
+
+class ReviewRun(Base):
+    __tablename__ = "review_runs"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_uuid)
+    review_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("code_reviews.id", ondelete="CASCADE"), nullable=False
+    )
+    stage: Mapped[str] = mapped_column(String(64), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False)
+    prompt_tokens: Mapped[int | None] = mapped_column(Integer)
+    completion_tokens: Mapped[int | None] = mapped_column(Integer)
+    elapsed_ms: Mapped[int | None] = mapped_column(Integer)
+    error: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+    review: Mapped[CodeReview] = relationship(back_populates="runs")
+
+
+class ReviewSource(Base):
+    __tablename__ = "review_sources"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_uuid)
+    review_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("code_reviews.id", ondelete="CASCADE"), nullable=False
+    )
+    path: Mapped[str] = mapped_column(Text, nullable=False)
+    start_line: Mapped[int | None] = mapped_column(Integer)
+    end_line: Mapped[int | None] = mapped_column(Integer)
+    commit_sha: Mapped[str | None] = mapped_column(String(64))
+    url: Mapped[str | None] = mapped_column(Text)
+    score: Mapped[float | None] = mapped_column()
+
+    review: Mapped[CodeReview] = relationship(back_populates="sources")
+
+
+class ConversationReview(Base):
+    __tablename__ = "conversation_reviews"
+    __table_args__ = (UniqueConstraint("conversation_id", name="uq_conversation_review_conversation"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_uuid)
+    conversation_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("conversations.id", ondelete="CASCADE"), nullable=False
+    )
+    review_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("code_reviews.id", ondelete="CASCADE"), nullable=False
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)

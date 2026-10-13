@@ -1,8 +1,9 @@
 import { lazy, Suspense, useEffect, useRef, useState } from 'react'
 import { aggregateUsage, api, streamChat } from './api'
 import { Composer } from './components/Composer'
+import { CodeReviews } from './components/CodeReviews'
 import { ConfirmDialog } from './components/ConfirmDialog'
-import { ConversationSidebar } from './components/ConversationSidebar'
+import { ConversationSidebar, type AppView } from './components/ConversationSidebar'
 import { AlertIcon, BranchIcon, ChartIcon, DatabaseIcon, MenuIcon, RefreshIcon } from './components/Icons'
 import { StatsDrawer } from './components/StatsDrawer'
 import type {
@@ -46,6 +47,7 @@ function ragLabel(status?: string): string {
 }
 
 function App() {
+  const [view, setView] = useState<AppView>('chat')
   const [conversations, setConversations] = useState<Conversation[]>([])
   const [activeId, setActiveId] = useState<string>()
   const [messages, setMessages] = useState<Message[]>([])
@@ -134,6 +136,7 @@ function App() {
       const conversation = await api.createConversation()
       setConversations((current) => [conversation, ...current])
       setActiveId(conversation.id)
+      setView('chat')
       setSidebarOpen(false)
     } catch (reason) {
       setError(`Не удалось создать диалог: ${errorText(reason)}`)
@@ -267,6 +270,20 @@ function App() {
     }
   }
 
+  const openReviewDiscussion = async (conversationId: string) => {
+    setView('chat')
+    setActiveId(conversationId)
+    setSidebarOpen(false)
+    if (conversations.some((conversation) => conversation.id === conversationId)) return
+    try {
+      const conversation = await api.getConversation(conversationId)
+      setConversations((current) => current.some((item) => item.id === conversation.id) ? current : [conversation, ...current])
+    } catch (reason) {
+      setConversations((current) => [{ id: conversationId, title: 'Review discussion' }, ...current])
+      setError(`Диалог открыт, но его данные не загружены: ${errorText(reason)}`)
+    }
+  }
+
   const selectedModel = activeConversation?.model ?? models[0]?.id ?? ''
   const contextWindow = activeConversation?.contextWindow ?? 16384
   const selectedPreset = (PRESETS.some((item) => item.id === String(contextWindow)) ? String(contextWindow) : 'custom') as ContextPreset
@@ -278,15 +295,20 @@ function App() {
         activeId={activeId}
         open={sidebarOpen}
         loading={loading}
+        view={view}
         onClose={() => setSidebarOpen(false)}
+        onViewChange={setView}
         onCreate={() => void createConversation()}
-        onSelect={setActiveId}
+        onSelect={(id) => { setActiveId(id); setView('chat') }}
         onRename={(id, title) => void updateConversation(id, { title })}
         onDelete={setDeleteTarget}
       />
 
       <main className="workspace">
-        <header className="topbar">
+        {view === 'reviews' ? (
+          <CodeReviews onMenu={() => setSidebarOpen(true)} onDiscuss={(conversationId) => void openReviewDiscussion(conversationId)} />
+        ) : <>
+          <header className="topbar">
           <button className="icon-button menu-button" onClick={() => setSidebarOpen(true)} aria-label="Открыть диалоги"><MenuIcon /></button>
           <div className="repo-state">
             <BranchIcon />
@@ -328,7 +350,7 @@ function App() {
             </div>
             <button className="stats-button" type="button" onClick={() => void openStats()}><ChartIcon /><span>Статистика</span></button>
           </div>
-        </header>
+          </header>
 
         {activeId && selectedPreset === 'custom' && (
           <div className="custom-context">
@@ -382,12 +404,13 @@ function App() {
           )}
         </section>
 
-        <Composer
-          disabled={!activeId || loadingMessages}
-          streaming={streaming}
-          onSend={(message) => void sendMessage(message)}
-          onStop={() => abortRef.current?.abort()}
-        />
+          <Composer
+            disabled={!activeId || loadingMessages}
+            streaming={streaming}
+            onSend={(message) => void sendMessage(message)}
+            onStop={() => abortRef.current?.abort()}
+          />
+        </>}
       </main>
 
       <StatsDrawer open={statsOpen} loading={statsLoading} summary={summary} current={currentUsage} aggregate={totalUsage} tools={tools} onClose={() => setStatsOpen(false)} />

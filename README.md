@@ -356,3 +356,96 @@ SQLite работает в WAL и ждет lock до 5 секунд. Не мас
 - SQLite history пережила restart backend; live API cascade delete вернул `204`, последующее чтение — `404`.
 
 Из-за уже занятых другими локальными проектами портов `3000` и `8000` проверенный экземпляр оставлен на `http://localhost:3010` и `http://localhost:8010`. При свободных портах Compose использует документированные defaults.
+
+## Day 32 - AI Code Review
+
+Day 32 добавляет один общий PR Review Engine для ручного запуска из чата, локального API и автономного GitHub Actions CLI. Engine получает metadata и все страницы changed files через GitHub REST API, рассматривает patch как недоверенные данные, применяет secret redaction, валидирует structured JSON через Pydantic и самостоятельно строит проверенные permalink. Строка finding сохраняется только тогда, когда она действительно входит в добавленные строки hunk; иначе остаётся привязка только к файлу.
+
+### Потоки выполнения
+
+```text
+ручной: /review 15 -> FastAPI/SSE -> GitHub API -> Review Engine
+                         -> base-SHA RAG + read-only MCP -> DeepSeek -> SQLite -> Chat/UI
+
+автоматический: pull_request -> GitHub Actions -> python -m app.review.cli
+                         -> тот же Review Engine -> один обновляемый PR comment
+
+синхронизация: GitHub marker + versioned JSON metadata -> /api/reviews/sync
+                         -> SQLite history -> Code Reviews UI
+```
+
+Ручное ревью никогда не публикуется в GitHub. Оно сохраняется в `pull_requests`, `code_reviews`, `review_findings`, `review_runs`, `review_sources` и связывается с диалогом через `conversation_reviews`. Следующие сообщения используют summary и findings связанного review, а не повторно передают весь diff. Удаление существующих conversations/messages и перестроение базы не выполняется: новые таблицы создаются SQLAlchemy отдельно.
+
+### RAG и MCP
+
+Локальное ревью использует существующий `HybridRetriever` только если `index_states.commit_sha` точно совпадает с base SHA PR. Diff всегда берётся из GitHub PR, а не из локального `git diff`. При несовпадении snapshot Engine продолжает анализ diff, явно фиксирует предупреждение и не выдаёт устаревший RAG за base-контекст. CI checkout выполняется на доверенном base SHA и создаёт отдельную временную SQLite/RAG базу; код PR не запускается. Существующий read-only MCP `git_repo_info` подтверждает локальный Git snapshot и не предоставляет shell/write operations.
+
+Большие PR делятся на bounded file groups. Лимит общего diff задаётся `AI_HELPER_REVIEW_MAX_DIFF_CHARS`; бинарные, недоступные и вышедшие за лимит файлы попадают в `unreviewed_files`, а `analysis_completeness` становится `partial`. Usage суммируется по фактическим ответам provider; если provider не вернул usage, точные tokens остаются `null`.
+
+### Локальная конфигурация
+
+Добавьте в локальный `.env`, не коммитя значения:
+
+```dotenv
+GITHUB_TOKEN=
+GITHUB_REPOSITORY=SlavaM1/aurelSpa
+REVIEW_MODEL=
+```
+
+Для private repository контейнер не видит пользовательский `gh auth` автоматически. Передайте fine-grained token через `GITHUB_TOKEN` с read access к Contents/Pull requests. Write permission нужна только явной CLI-публикации; локальные API и `/review` её не используют. Не монтируйте в контейнер `~/.config/gh`, SSH keys или весь home directory.
+
+### Ручное ревью
+
+В существующем чате поддерживаются:
+
+```text
+/review 15
+/review https://github.com/SlavaM1/aurelSpa/pull/15
+```
+
+SSE показывает этапы `Getting PR`, `Fetching diff`, `Retrieving project context`, `AI analysis`, `Finalizing review`. После ответа можно спрашивать о конкретном finding в том же диалоге. Вкладка **Code Reviews** получает PR, запускает/re-runs job, показывает состояния `not reviewed`, `pending`, `running`, `completed`, `failed`, `outdated`, фильтрует findings и создаёт связанный диалог через **Discuss in Chat**.
+
+### Review API
+
+| Метод | Path | Назначение |
+|---|---|---|
+| `GET` | `/api/pull-requests` | обновить open PR из GitHub и вернуть cached history |
+| `GET` | `/api/pull-requests/{number}` | metadata и changed files PR |
+| `GET` | `/api/pull-requests/{number}/reviews` | история запусков PR |
+| `POST` | `/api/pull-requests/{number}/review` | bounded background review job |
+| `GET` | `/api/reviews` | последние review runs |
+| `GET` | `/api/reviews/{id}` | report, findings, sources и metrics |
+| `GET` | `/api/reviews/{id}/findings` | findings отдельно |
+| `POST` | `/api/reviews/{id}/discuss` | создать conversation, связанную с review |
+| `POST` | `/api/reviews/sync` | идемпотентно импортировать Actions comments |
+
+### CI entrypoint и GitHub Actions
+
+CLI использует тот же Engine:
+
+```bash
+cd backend
+python -m app.review.cli \
+  --repo SlavaM1/aurelSpa \
+  --pr 15 \
+  --repository-path /path/to/trusted-base-checkout
+```
+
+Для smoke без GitHub comment добавьте `--no-publish`. В Actions задайте repository secret `DEEPSEEK_API_KEY`; встроенный `GITHUB_TOKEN` передаётся job с минимальными permissions. Workflow должен запускаться через `pull_request`, checkout только `github.event.pull_request.base.sha`, пропускать draft/fork PR и не использовать `pull_request_target`. Он становится активным для новых PR только после merge workflow в соответствующую base branch.
+
+Comment содержит marker `ai-helper-code-review:v1` и versioned base64 JSON metadata. Publisher обновляет только marker-comment текущего authenticated actor, не трогает чужие комментарии и сохраняет один актуальный summary на PR. Локальная синхронизация создаёт отдельную historical запись на каждый reviewed head SHA.
+
+### Тесты Day 32
+
+```bash
+docker compose run --rm --no-deps \
+  -v "$PWD/backend:/src" -w /src backend \
+  sh -c "pip install -e '.[test]' && python -m pytest && python -m ruff check app tests"
+
+cd frontend
+npm test -- --run
+npm run typecheck
+npm run build
+```
+
+Unit tests используют mock GitHub/DeepSeek: pagination, renamed/binary patches, changed-line validation, invalid structured output retry, empty diff, usage aggregation, persistence/conversation linkage, marker round-trip и безопасное обновление собственного comment. Реальный LLM нужен только для отдельного live smoke.

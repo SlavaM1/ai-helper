@@ -109,6 +109,72 @@ export interface SummaryInfo {
   raw?: JsonRecord
 }
 
+export type ReviewStatus = 'pending' | 'running' | 'completed' | 'failed' | string
+
+export interface ReviewSummary {
+  id: string
+  pullRequestNumber: number
+  status: ReviewStatus
+  headSha?: string
+  summary?: string
+  findingsCount?: number
+  severityCounts?: Record<string, number>
+  model?: string
+  elapsedMs?: number
+  createdAt?: string
+  updatedAt?: string
+  completedAt?: string
+  raw?: JsonRecord
+}
+
+export interface PullRequest {
+  number: number
+  title: string
+  author: string
+  headBranch: string
+  baseBranch: string
+  state: string
+  updatedAt?: string
+  htmlUrl?: string
+  headSha?: string
+  reviewStatus?: ReviewStatus
+  lastReview?: ReviewSummary
+  raw?: JsonRecord
+}
+
+export interface ReviewFinding {
+  id: string
+  title: string
+  description: string
+  severity: string
+  category: string
+  filePath?: string
+  lineStart?: number
+  lineEnd?: number
+  suggestion?: string
+  impact?: string
+  evidence?: string
+  permalink?: string
+  codeSnippet?: string
+  raw?: JsonRecord
+}
+
+export interface CodeReview extends ReviewSummary {
+  findings: ReviewFinding[]
+  sources: Source[]
+}
+
+export interface ReviewSyncResult {
+  synced: number | boolean
+  message?: string
+  raw?: JsonRecord
+}
+
+export interface ReviewDiscussion {
+  conversationId: string
+  reviewId: string
+}
+
 export type ContextPreset = '8192' | '16384' | '32768' | '65536' | 'custom'
 
 export interface StreamEventHandlers {
