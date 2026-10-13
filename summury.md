@@ -143,7 +143,7 @@ Diff всегда приходит из GitHub PR API, а не из локаль
 
 Comment содержит marker `ai-helper-code-review:v1` и versioned base64 JSON metadata. Publisher ищет marker только среди comments текущего authenticated actor и обновляет один собственный comment. Чужие comments не редактируются.
 
-`POST /api/reviews/sync` импортировал Actions report: первый sync `synced_reviews=1`, повторный `0`. Для rerun на том же head сравнивается `generated_at`: более новая metadata обновляет существующий review, неизменная остаётся идемпотентной. После sync PR #1 имеет status `completed`, reviewed/current head `5de94faa...`, 2 findings, `deepseek-flash`, 9 984 tokens и 36 399 ms по первому successful Actions report.
+`POST /api/reviews/sync` импортировал Actions report: первый sync `synced_reviews=1`, повторный `0`. Для rerun на том же head сравнивается `generated_at`: более новая metadata обновляет существующий review, неизменная остаётся идемпотентной. После финального sync PR #1 имеет status `completed`, reviewed/current head `5de94faa...`, 1 finding, `deepseek-flash`, 9 216 tokens и 32 373 ms из обновлённого rerun report. Первый successful report до rerun содержал 2 findings, 9 984 tokens и 36 399 ms.
 
 ## 6. SQLite
 
