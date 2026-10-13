@@ -369,7 +369,10 @@ class ReviewSyncService:
                     )
                 except ActiveReviewError:
                     continue
-                if review.status != "completed":
+                finished_at = review.finished_at
+                if finished_at is not None and finished_at.tzinfo is None:
+                    finished_at = finished_at.replace(tzinfo=UTC)
+                if review.status != "completed" or finished_at is None or report.generated_at > finished_at:
                     self.history.complete(review.id, report, github_comment=comment)
                     synced_reviews += 1
         return {"pull_requests": len(pull_requests), "synced_reviews": synced_reviews, "synced_at": utc_now()}

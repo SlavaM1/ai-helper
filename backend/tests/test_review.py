@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import httpx
 
@@ -27,7 +27,7 @@ from app.review.schemas import (
     ReviewReport,
     Severity,
 )
-from app.review.service import ReviewHistoryService
+from app.review.service import ReviewHistoryService, ReviewSyncService
 
 
 def make_pr(*files: PullRequestFile) -> PullRequestData:
@@ -278,5 +278,40 @@ def test_publisher_updates_only_owned_marker_comment() -> None:
         assert result["id"] == 2
         assert github.updated == 2
         assert github.created is False
+
+    asyncio.run(exercise())
+
+
+def test_sync_is_idempotent_but_imports_newer_comment_metadata(db) -> None:
+    class FakeGitHub:
+        def __init__(self) -> None:
+            self.report = make_report()
+
+        async def list_pull_requests(self, state):
+            return [make_pr()]
+
+        async def list_comments(self, number):
+            encoded = encode_metadata(self.report)
+            return [
+                {
+                    "id": 99,
+                    "html_url": "https://example.test/comment/99",
+                    "body": f"<!-- ai-helper-code-review:v1:{encoded} -->",
+                }
+            ]
+
+    async def exercise() -> None:
+        github = FakeGitHub()
+        sync = ReviewSyncService(db, github)
+        assert (await sync.sync())["synced_reviews"] == 1
+        assert (await sync.sync())["synced_reviews"] == 0
+        github.report = github.report.model_copy(
+            update={
+                "generated_at": github.report.generated_at + timedelta(seconds=1),
+                "summary": "Updated report",
+            }
+        )
+        assert (await sync.sync())["synced_reviews"] == 1
+        assert ReviewHistoryService(db).list()[0].summary == "Updated report"
 
     asyncio.run(exercise())

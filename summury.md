@@ -100,3 +100,113 @@ Compose defaults остаются 3000/8000 и на свободной маши�
 - Delivery summary добавлен следующим commit; точный remote HEAD приведен в финальном отчете и проверен командой `git ls-remote origin refs/heads/dev/day31`.
 
 SHA самого commit, содержащего этот файл, невозможно надежно включить в его содержимое до вычисления Git object ID без создания следующего commit. Финальный SHA поэтому фиксируется в delivery response и remote branch verification.
+
+# Day 32 delivery summary
+
+## 1. Что добавлено
+
+Добавлен один общий AI Code Review Engine для трёх entrypoints: `/review` в существующем SSE-чате, bounded background API jobs и автономный `python -m app.review.cli` для GitHub Actions. Engine получает PR metadata и paginated changed files через GitHub REST API, группирует bounded diff, редактирует типовые secrets, использует base-SHA RAG и read-only MCP metadata, вызывает существующий `DeepSeekClient`, валидирует JSON через Pydantic, дедуплицирует findings и проверяет line references по добавленным строкам hunk.
+
+Обязательные категории: `potential_bug`, `architecture_issue`, `recommendation`; severity: `CRITICAL`, `HIGH`, `MEDIUM`, `LOW`, `INFO`. Finding содержит стабильный ID, title, description, impact, evidence, file/range, suggested fix, backend-generated permalink и confidence. Findings ниже configurable confidence `0.60` отбрасываются. Бинарные/недоступные/вышедшие за budget файлы фиксируются в `unreviewed_files`, а полнота становится `partial`.
+
+## 2. Automatic review
+
+Workflow установлен в отдельной ветке `aurelSpa/feature/ai-code-review` и открыт как PR:
+
+- PR: `https://github.com/SlavaM1/aurelSpa/pull/1`.
+- Workflow branch HEAD: `5de94faa2fba1ebc18b55e4927cce5c3e5cf4fea`.
+- Pinned AI Helper: `41018c3f41ec51fc59f5188f7d9100b955ce19d0`.
+- Events: `opened`, `synchronize`, `reopened`, `ready_for_review`.
+- Permissions: `contents: read`, `pull-requests: write`.
+- Draft и fork PR пропускаются; `pull_request_target` не используется.
+- Checkout выполняется только для trusted base SHA; код PR не запускается.
+- `actions/checkout` и `actions/setup-python` закреплены commit SHA.
+- Secret `DEEPSEEK_API_KEY` установлен через GitHub Actions secrets без вывода значения.
+
+Первый реальный run на старом AI Helper SHA выявил нехватку output budget для reasoning-модели и завершился failure. После добавления JSON mode, JSON envelope parsing, отдельного `REVIEW_MAX_OUTPUT_TOKENS=8192` и failed-state persistence повторный run `38401257885` прошёл успешно за 1m45s. Ручной rerun того же run также успешно завершился за 1m54s и обновил существующий comment `6146109809`; marker-comments осталось ровно один.
+
+Workflow пока не merged. Он проверенно работает в integration PR, но станет штатно активен для последующих PR в `main` только после merge PR #1. Автоматический merge не выполнялся.
+
+## 3. Manual review и follow-up
+
+Поддерживаются `/review 1` и полный URL разрешённого `SlavaM1/aurelSpa`. Live smoke PR #1 прошёл цепочку GitHub API -> diff -> RAG -> MCP -> DeepSeek -> Pydantic -> SQLite -> SSE/chat. Успешный manual run проанализировал 1/1 файл, использовал `deepseek-flash`, 21 729 provider tokens и 88 870 ms. Предыдущие два невалидных JSON smoke attempts сохранены как failed run, а не скрыты.
+
+Следующий вопрос в том же conversation успешно получил `active_code_review` с review ID, summary и findings и ответил о первой проблеме без повторной передачи полного diff. Manual review не создал GitHub comment; первый comment появился только в Actions run.
+
+## 4. RAG и MCP
+
+Review RAG переиспользует Day 31 `HybridRetriever`. Перед retrieval проверяется `index_states.status=ready` и точное совпадение `commit_sha` с base SHA PR. Для live PR #1 использован индекс `main@eff6cb4dd0f6a30797da4380548e30c7a63be9ba`, 147 files / 631 chunks, совпадающий с PR base. В CI тот же `RagIndexer` строит отдельную временную SQLite базу по trusted base checkout; глобальный локальный индекс не перезаписывается.
+
+Diff всегда приходит из GitHub PR API, а не из локального `git_diff`. MCP используется по назначению: `git_repo_info` подтверждает repository/branch/commit trusted checkout. Arbitrary shell и write Git tools не добавлялись.
+
+## 5. GitHub sync
+
+Comment содержит marker `ai-helper-code-review:v1` и versioned base64 JSON metadata. Publisher ищет marker только среди comments текущего authenticated actor и обновляет один собственный comment. Чужие comments не редактируются.
+
+`POST /api/reviews/sync` импортировал Actions report: первый sync `synced_reviews=1`, повторный `0`. Для rerun на том же head сравнивается `generated_at`: более новая metadata обновляет существующий review, неизменная остаётся идемпотентной. После sync PR #1 имеет status `completed`, reviewed/current head `5de94faa...`, 2 findings, `deepseek-flash`, 9 984 tokens и 36 399 ms по первому successful Actions report.
+
+## 6. SQLite
+
+Добавлены таблицы:
+
+- `pull_requests`;
+- `code_reviews`;
+- `review_findings`;
+- `review_runs`;
+- `review_sources`;
+- `conversation_reviews`.
+
+Существующие `conversations`, `messages`, RAG tables и named volume не удалялись. На проверке после нескольких force-recreate/restart сохранены 5 conversations, 22 messages, review history и RAG index. Новые таблицы добавляются отдельно через SQLAlchemy `create_all`; существующие таблицы не изменяются.
+
+## 7. Backend API и UI
+
+Добавлены endpoints `/api/pull-requests`, `/api/pull-requests/{number}`, `/api/pull-requests/{number}/reviews`, background `POST .../review`, `/api/reviews`, `/api/reviews/{id}`, `/findings`, `/discuss` и `/api/reviews/sync`. Для одного PR/head запрещены дублирующиеся active jobs; semaphore ограничивает параллелизм.
+
+В существующем React SPA добавлена навигация **Code Reviews**, PR list, refresh/sync, run/re-run, GitHub link, status polling, outdated state, model/duration/finding counts, report detail, severity/category filters, RAG sources и **Discuss in Chat**. Отдельное приложение и новый frontend stack не создавались.
+
+## 8. DeepSeek
+
+Provider live вернул `deepseek-flash` и `deepseek-v4-pro`. Day 32 structured review и follow-up проверены live на `deepseek-flash`. Для structured review включён `response_format=json_object`; hidden reasoning не читается и не сохраняется. Отдельный review output budget равен 8192. `deepseek-v4-pro` в Day 32 review не запускался; его live chat проверка относится к Day 31.
+
+## 9. Tests
+
+Финальная ожидаемая матрица после последнего sync fix:
+
+- Backend pytest: 21 tests, включая 10 review tests.
+- Ruff: без ошибок.
+- Frontend Vitest: 16 tests.
+- Frontend typecheck и production build: успешно.
+- GitHub Actions: один initial failure, затем два successful executions на run `38401257885` (original + rerun).
+- Live manual `/review 1`: успешно после исправления output budget.
+- Live follow-up: успешно, review context сохранён в conversation.
+- Live GitHub sync и повторная идемпотентная sync: успешно.
+
+Точные финальные counts подтверждаются последним test run перед delivery; если они отличаются, приоритет имеет финальный ответ.
+
+## 10. Docker
+
+Backend и frontend images пересобраны, services force-recreated без `down -v`. Рабочие адреса сохранены:
+
+- UI: `http://localhost:3010`.
+- API/Swagger: `http://localhost:8010`, `http://localhost:8010/docs`.
+
+Health проверен напрямую и через nginx; backend version `2.0.0`, DeepSeek configured, repository available. MCP, RAG, models, PR API и SQLite tables проверены реальными HTTP/database responses.
+
+## 11. Ограничения
+
+- PR #1 должен быть merged вручную, чтобы workflow стал частью `main` и штатно применялся к следующим PR.
+- Fork PR намеренно пропускаются из-за отсутствия secrets/write permissions.
+- Python dependency ranges ограничены major versions, но lockfile с hashes для Actions пока отсутствует.
+- GitHub Actions вывел deprecation warning для Node 20 внутри закреплённых revisions `checkout@v4`/`setup-python@v5`; run успешен, но pins потребуется обновить до проверенных новых major revisions.
+- SQLite schema по-прежнему не использует Alembic; Day 32 добавляет только новые таблицы и не изменяет существующие columns.
+- Нет browser E2E/screenshots; UI проверен component tests, typecheck, production build, nginx и live API.
+- AI review остаётся advisory и не заменяет тесты, security tooling и human review.
+
+## 12. Git
+
+- `ai-helper` branch: `dev/day32`.
+- Review engine commit, закреплённый в workflow: `41018c3f41ec51fc59f5188f7d9100b955ce19d0`.
+- Финальный documentation/sync-fix commit и remote HEAD указываются в delivery response после push.
+- `aurelSpa` branch: `feature/ai-code-review`.
+- `aurelSpa` workflow commit: `5de94faa2fba1ebc18b55e4927cce5c3e5cf4fea`.
+- PR: `https://github.com/SlavaM1/aurelSpa/pull/1`, state open, merge не выполнялся.
