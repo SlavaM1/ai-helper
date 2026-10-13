@@ -214,6 +214,15 @@ def test_empty_or_binary_diff_does_not_call_llm() -> None:
     asyncio.run(exercise())
 
 
+def test_low_confidence_findings_are_filtered() -> None:
+    low = make_report().findings[0].model_copy(update={"confidence": 0.59})
+    high = make_report().findings[0].model_copy(update={"title": "Supported", "confidence": 0.6})
+    findings = CodeReviewAgent._validate_findings(
+        make_pr(), [low, high], {"src/OrderService.java": {11}}
+    )
+    assert [item.title for item in findings] == ["Supported"]
+
+
 def test_review_persistence_and_conversation_link(db) -> None:
     from app.crud import ConversationService
     from app.schemas import ConversationCreate

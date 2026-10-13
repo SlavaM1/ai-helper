@@ -43,6 +43,8 @@ class Settings(BaseSettings):
     )
     review_max_parallel: int = Field(default=1, ge=1, le=4)
     review_max_diff_chars: int = Field(default=100_000, ge=10_000, le=500_000)
+    review_max_output_tokens: int = Field(default=8_192, ge=1_024, le=16_384)
+    review_min_confidence: float = Field(default=0.6, ge=0, le=1)
 
     model_config = SettingsConfigDict(
         env_prefix="AI_HELPER_",

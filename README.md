@@ -390,6 +390,8 @@ Day 32 добавляет один общий PR Review Engine для ручно
 GITHUB_TOKEN=
 GITHUB_REPOSITORY=SlavaM1/aurelSpa
 REVIEW_MODEL=
+REVIEW_MAX_OUTPUT_TOKENS=8192
+REVIEW_MIN_CONFIDENCE=0.6
 ```
 
 Для private repository контейнер не видит пользовательский `gh auth` автоматически. Передайте fine-grained token через `GITHUB_TOKEN` с read access к Contents/Pull requests. Write permission нужна только явной CLI-публикации; локальные API и `/review` её не используют. Не монтируйте в контейнер `~/.config/gh`, SSH keys или весь home directory.

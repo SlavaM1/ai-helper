@@ -312,8 +312,12 @@ async def chat(conversation_id: str, data: ChatRequest, db: Db) -> StreamingResp
                 history.link_conversation(conversation_id, review.id)
                 yield _event("status", {"type": "status", "stage": "Retrieving project context"})
                 yield _event("status", {"type": "status", "stage": "AI analysis"})
-                report = await _review_agent(db).review(pull_request, model=conversation.model)
-                history.complete(review.id, report)
+                try:
+                    report = await _review_agent(db).review(pull_request, model=conversation.model)
+                    history.complete(review.id, report)
+                except Exception as exc:
+                    history.fail(review.id, str(exc))
+                    raise
                 yield _event("status", {"type": "status", "stage": "Finalizing review"})
                 content = _review_formatter.markdown(report)
                 assistant = service.add_message(

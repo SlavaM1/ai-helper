@@ -54,11 +54,32 @@ class DeepSeekClient:
     async def complete(
         self, messages: list[dict[str, str]], *, model: str, max_tokens: int
     ) -> tuple[str, dict[str, int]]:
+        return await self._complete(messages, model=model, max_tokens=max_tokens)
+
+    async def complete_json(
+        self, messages: list[dict[str, str]], *, model: str, max_tokens: int
+    ) -> tuple[str, dict[str, int]]:
+        return await self._complete(
+            messages,
+            model=model,
+            max_tokens=max_tokens,
+            response_format={"type": "json_object"},
+        )
+
+    async def _complete(
+        self,
+        messages: list[dict[str, str]],
+        *,
+        model: str,
+        max_tokens: int,
+        response_format: dict[str, str] | None = None,
+    ) -> tuple[str, dict[str, int]]:
         self.require_key()
         response = await self.client.chat.completions.create(
             model=model,
             messages=messages,  # type: ignore[arg-type]
             max_tokens=max_tokens,
+            **({"response_format": response_format} if response_format else {}),
         )
         usage = response.usage
         if usage is None:

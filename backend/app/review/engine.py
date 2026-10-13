@@ -230,7 +230,12 @@ class CodeReviewAgent:
             summaries.append(result.summary)
             findings.extend(result.findings)
 
-        validated = self._validate_findings(pull_request, findings, context.changed_lines)
+        validated = self._validate_findings(
+            pull_request,
+            findings,
+            context.changed_lines,
+            min_confidence=self.settings.review_min_confidence,
+        )
         completeness = "partial" if context.unreviewed_files else "complete"
         summary = " ".join(dict.fromkeys(item.strip() for item in summaries if item.strip()))
         if rag_warning:
@@ -302,7 +307,9 @@ class CodeReviewAgent:
             + json.dumps(payload, ensure_ascii=False)
         )
         messages = [{"role": "system", "content": REVIEW_SYSTEM_PROMPT}, {"role": "user", "content": prompt}]
-        text, usage = await self.llm.complete(messages, model=model, max_tokens=self.settings.max_output_tokens)
+        text, usage = await self._complete_json(
+            messages, model=model, max_tokens=self.settings.review_max_output_tokens
+        )
         try:
             return self._parse_result(text), usage
         except (ValidationError, ValueError, json.JSONDecodeError):
@@ -310,8 +317,8 @@ class CodeReviewAgent:
                 {"role": "assistant", "content": text[:8_000]},
                 {"role": "user", "content": "The response was invalid. Return one valid JSON object matching the schema only."},
             ]
-            text, retry_usage = await self.llm.complete(
-                retry, model=model, max_tokens=self.settings.max_output_tokens
+            text, retry_usage = await self._complete_json(
+                retry, model=model, max_tokens=self.settings.review_max_output_tokens
             )
             combined = {
                 key: int(usage.get(key, 0)) + int(retry_usage.get(key, 0))
@@ -324,18 +331,31 @@ class CodeReviewAgent:
         cleaned = text.strip()
         if cleaned.startswith("```"):
             cleaned = re.sub(r"^```(?:json)?\s*|\s*```$", "", cleaned, flags=re.IGNORECASE)
-        value = json.loads(cleaned)
+        start = cleaned.find("{")
+        if start < 0:
+            raise ValueError("LLM response did not contain a JSON object")
+        value, _ = json.JSONDecoder().raw_decode(cleaned[start:])
         return LlmReviewResult.model_validate(value)
+
+    async def _complete_json(
+        self, messages: list[dict[str, str]], *, model: str, max_tokens: int
+    ) -> tuple[str, dict[str, int]]:
+        method = getattr(self.llm, "complete_json", self.llm.complete)
+        return await method(messages, model=model, max_tokens=max_tokens)
 
     @staticmethod
     def _validate_findings(
         pr: PullRequestData,
         findings: list[ReviewFinding],
         changed_lines: dict[str, set[int]],
+        *,
+        min_confidence: float = 0.6,
     ) -> list[ReviewFinding]:
         output: list[ReviewFinding] = []
         seen: set[tuple[str, str | None, int | None]] = set()
         for item in findings:
+            if item.confidence < min_confidence:
+                continue
             line_start = item.line_start
             line_end = item.line_end
             valid_lines = changed_lines.get(item.filename or "", set())
