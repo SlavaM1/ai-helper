@@ -24,7 +24,7 @@ from .models import MessageRole
 from .rag import HybridRetriever, RagIndexer
 from .review.engine import CodeReviewAgent, ReviewRAGService, parse_review_command
 from .review.formatter import ReviewReportFormatter
-from .review.github import GitHubApiError, GitHubPRClient
+from .review.github import GitHubApiError, GitHubPRClient, GitHubReviewPublisher
 from .review.schemas import PullRequestData
 from .review.service import (
     ActiveReviewError,
@@ -155,7 +155,12 @@ async def _execute_review(review_id: str, pull_request: PullRequestData) -> None
             try:
                 history.mark_running(review_id)
                 report = await _review_agent(db).review(pull_request)
-                history.complete(review_id, report)
+                github = _github()
+                try:
+                    comment = await GitHubReviewPublisher(github, _review_formatter).publish(report)
+                finally:
+                    await github.close()
+                history.complete(review_id, report, github_comment=comment)
             except Exception as exc:
                 logger.exception("Review job failed for %s", review_id)
                 history.fail(review_id, str(exc))

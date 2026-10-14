@@ -374,7 +374,7 @@ Day 32 добавляет один общий PR Review Engine для ручно
                          -> SQLite history -> Code Reviews UI
 ```
 
-Ручное ревью никогда не публикуется в GitHub. Оно сохраняется в `pull_requests`, `code_reviews`, `review_findings`, `review_runs`, `review_sources` и связывается с диалогом через `conversation_reviews`. Следующие сообщения используют summary и findings связанного review, а не повторно передают весь diff. Удаление существующих conversations/messages и перестроение базы не выполняется: новые таблицы создаются SQLAlchemy отдельно.
+Ручное ревью сохраняется в `pull_requests`, `code_reviews`, `review_findings`, `review_runs`, `review_sources`, связывается с диалогом через `conversation_reviews` и публикует или обновляет marker-comment в GitHub PR. Автором комментария будет владелец локального `GITHUB_TOKEN`; повторный запуск обновляет его существующий marker-comment. Следующие сообщения используют summary и findings связанного review, а не повторно передают весь diff. Удаление существующих conversations/messages и перестроение базы не выполняется: новые таблицы создаются SQLAlchemy отдельно.
 
 ### RAG и MCP
 

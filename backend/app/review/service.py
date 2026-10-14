@@ -352,6 +352,14 @@ class ReviewSyncService:
             pr = self.history.upsert_pull_request(data)
             comments = await self.github.list_comments(data.number)
             for comment in comments:
+                comment_id = int(comment["id"])
+                if self.db.scalar(
+                    select(CodeReview).where(
+                        CodeReview.github_comment_id == comment_id,
+                        CodeReview.source == "manual",
+                    )
+                ):
+                    continue
                 metadata = decode_metadata(str(comment.get("body", "")))
                 if metadata is None:
                     continue
@@ -362,7 +370,7 @@ class ReviewSyncService:
                     continue
                 if report.repository != data.repository or report.pr_number != data.number:
                     continue
-                external_id = f"github:{comment.get('id')}:{report.head_sha}"
+                external_id = f"github:{comment_id}:{report.head_sha}"
                 try:
                     review = self.history.create_review(
                         pr, source="github_action", model=report.model, external_id=external_id

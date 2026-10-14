@@ -265,7 +265,7 @@ export function CodeReviews({ onMenu, onDiscuss }: Props) {
       ) : (
         <section className="reviews-list-view">
           <div className="reviews-intro">
-            <div><span>Review queue</span><h1>Pull requests</h1><p>Run an AI review against the latest head commit, then inspect and discuss each finding.</p></div>
+            <div><span>Review queue</span><h1>Pull requests</h1><p>Run an AI review against the latest head commit, publish it to GitHub, then inspect and discuss each finding.</p></div>
             <div className="reviews-count"><strong>{pullRequests.length}</strong><span>tracked</span></div>
           </div>
 

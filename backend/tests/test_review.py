@@ -293,6 +293,34 @@ def test_publisher_updates_only_owned_marker_comment() -> None:
     asyncio.run(exercise())
 
 
+def test_sync_does_not_reimport_a_locally_published_review(db) -> None:
+    class FakeGitHub:
+        async def list_pull_requests(self, state):
+            return [make_pr()]
+
+        async def list_comments(self, number):
+            encoded = encode_metadata(make_report())
+            return [
+                {
+                    "id": 99,
+                    "html_url": "https://example.test/comment/99",
+                    "body": f"<!-- ai-helper-code-review:v1:{encoded} -->",
+                }
+            ]
+
+    async def exercise() -> None:
+        history = ReviewHistoryService(db)
+        review = history.create_review(history.upsert_pull_request(make_pr()), source="manual", model="deepseek-flash")
+        history.mark_running(review.id)
+        history.complete(review.id, make_report(), github_comment={"id": 99})
+
+        sync = ReviewSyncService(db, FakeGitHub())
+        assert (await sync.sync())["synced_reviews"] == 0
+        assert len(history.list()) == 1
+
+    asyncio.run(exercise())
+
+
 def test_sync_is_idempotent_but_imports_newer_comment_metadata(db) -> None:
     class FakeGitHub:
         def __init__(self) -> None:
