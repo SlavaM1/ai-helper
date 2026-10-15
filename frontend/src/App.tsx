@@ -24,6 +24,7 @@ const FALLBACK_MODELS: ModelInfo[] = [
 ]
 
 const MarkdownMessage = lazy(() => import('./components/MarkdownMessage').then((module) => ({ default: module.MarkdownMessage })))
+const FileAgent = lazy(() => import('./components/FileAgent').then((module) => ({ default: module.FileAgent })))
 
 const PRESETS: { id: ContextPreset; label: string }[] = [
   { id: '8192', label: '8K' },
@@ -307,6 +308,10 @@ function App() {
       <main className="workspace">
         {view === 'reviews' ? (
           <CodeReviews onMenu={() => setSidebarOpen(true)} onDiscuss={(conversationId) => void openReviewDiscussion(conversationId)} />
+        ) : view === 'file-agent' ? (
+          <Suspense fallback={<div className="chat-loading" role="status" aria-label="Загрузка File Agent"><i /><i /><i /></div>}>
+            <FileAgent onMenu={() => setSidebarOpen(true)} models={models} initialModel={selectedModel} modelError={modelError} />
+          </Suspense>
         ) : <>
           <header className="topbar">
           <button className="icon-button menu-button" onClick={() => setSidebarOpen(true)} aria-label="Открыть диалоги"><MenuIcon /></button>

@@ -1,0 +1,89 @@
+{
+  "date": "2026-10-15",
+  "repository": "SlavaM1/aurelSpa",
+  "base_sha": "53d1c04e139db0fb4cff69ad34a4f975efe13cb2",
+  "source_modified": false,
+  "model": "deepseek-flash",
+  "unique_existing_files_read": 20,
+  "unique_files_read_including_generated": 23,
+  "successful_file_read_calls": 42,
+  "artifact_directory_in_backend": "/data/file-agent/.file-agent-owners",
+  "exact_artifacts_are_private": true,
+  "scenarios": [
+    {
+      "name": "API overview with services",
+      "task_id": "7496d422-92c4-4c2b-9e9d-39506528bfdc",
+      "workspace_id": "7496d422-92c4-4c2b-9e9d-39506528bfdc-8f4d2db9feb8480b848a5bdf21652bdd",
+      "file": "docs/api-overview.md",
+      "existing_files_read": 10,
+      "additions": 115,
+      "deletions": 0,
+      "patch_sha256": "0d236a313f0a373c1ba15dd7993b144536a3ba3fb9f95e73a00b83f81300cb99",
+      "total_tokens": 207473,
+      "llm_calls": 23,
+      "post_hardening_replay_id": "ada3eea6-aae7-4903-89ef-3c4e6ace5cf5",
+      "same_diff": true,
+      "validation_ok": true,
+      "status": "completed"
+    },
+    {
+      "name": "Controller/repository architecture report",
+      "task_id": "87269d9a-2296-4ee6-b3a1-94393cb3b89c",
+      "workspace_id": "87269d9a-2296-4ee6-b3a1-94393cb3b89c-fb67a638b8664a5f8a3e308411f3a846",
+      "file": "docs/controller-repository-report.md",
+      "existing_files_read": 5,
+      "additions": 73,
+      "deletions": 0,
+      "patch_sha256": "c3fcbac12575e78515869f7f2f98b7276861aeb1ea664d7ebe9363f29a2b9893",
+      "total_tokens": 238804,
+      "llm_calls": 27,
+      "post_hardening_replay_id": "3a529e1f-510c-4fea-b6a5-5a280a746e75",
+      "same_diff": true,
+      "validation_ok": true,
+      "status": "completed"
+    },
+    {
+      "name": "Authentication ADR with RAG",
+      "task_id": "5f32eb0e-73e7-49f1-83bf-a3dc59a95ee3",
+      "workspace_id": "5f32eb0e-73e7-49f1-83bf-a3dc59a95ee3-4ae1ec8fa0bc458f9d8930148d47a412",
+      "file": "docs/adr/0001-authentication-architecture.md",
+      "existing_files_read": 8,
+      "additions": 67,
+      "deletions": 0,
+      "patch_sha256": "bb4ec8f14465a4478f52f80e07eb0d16bc6b9e659c7508501e8a68ab5f852e3a",
+      "total_tokens": 348557,
+      "llm_calls": 32,
+      "successful_rag_calls": 2,
+      "successful_file_apply_patch_calls": 1,
+      "post_hardening_replay_id": "2125e83e-c2c7-4162-beb4-0835e240c19d",
+      "extra_replay_discarded_after_verification": true,
+      "same_diff": true,
+      "validation_ok": true,
+      "status": "completed"
+    }
+  ],
+  "tests": {
+    "backend_python_314": { "passed": 112, "failed": 0 },
+    "backend_docker_python_312": { "passed": 112, "failed": 0 },
+    "frontend": { "passed": 23, "failed": 0 },
+    "ruff": "passed",
+    "typecheck": "passed",
+    "production_build": "passed",
+    "browser_open_file_diff_readonly_apply": "passed",
+    "mobile_390px_overflow": false
+  },
+  "restart_counts_before_and_after": {
+    "conversations": 10,
+    "messages": 32,
+    "code_reviews": 14,
+    "rag_documents": 206,
+    "rag_chunks": 915,
+    "file_agent_tasks": 19
+  },
+  "limitations": [
+    "Static Markdown and Java lexical/architecture checks, not compilation or correctness proof.",
+    "Source apply intentionally disabled in read-only Docker; trusted writable host opt-in only.",
+    "Public patches are redacted previews; exact replay uses private artifacts.",
+    "LLM rerun may differ. Generated documentation still requires human factual review."
+  ]
+}

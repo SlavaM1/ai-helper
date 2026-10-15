@@ -14,6 +14,7 @@
 - Сохранение сообщений, usage, источников, вызовов tools и временных метрик.
 - Периодическая summary-память длинного диалога.
 - React-интерфейс с Markdown/GFM, подсветкой кода, историей диалогов, статистикой и ручной переиндексацией.
+- Project File Agent: автономный поиск, чтение и реальные изменения в изолированных Git-копиях; [Day 34](#day-34--autonomous-project-file-agent).
 
 ## Архитектура
 
@@ -102,7 +103,7 @@ GitHub permalink формируется только для распознанн
 
 ## MCP tools
 
-Backend для каждого обращения запускает официальный MCP client/server session по stdio. Сервер экспортирует только следующие инструменты:
+Backend для каждого обращения запускает официальный MCP client/server session по stdio. Существующий read-only Git-сервер экспортирует следующие инструменты (отдельный файловый сервер описан в Day 34):
 
 | Tool | Назначение и ограничения |
 |---|---|
@@ -114,7 +115,7 @@ Backend для каждого обращения запускает официа
 
 Пути должны быть относительными, не могут содержать `..`, `.git`, NUL или переводы строк и дополнительно проверяются после `resolve`. Из окружения дочернего Git-процесса удаляются переменные, способные переопределить repository/config/diff; отключены credential helper, terminal prompt и optional locks. Remote URL очищается от userinfo, query и типовых token-параметров.
 
-MCP не предоставляет произвольный shell и не содержит write-команд. Agent автоматически выбирает только `git_current_branch`, `git_status` или `git_diff`; `git_list_files` экспортируется MCP-сервером, но текущий orchestrator его не выбирает, а `git_repo_info` используется endpoint `GET /api/repository`.
+Git MCP не предоставляет произвольный shell и не содержит write-команд. Developer Assistant автоматически выбирает только `git_current_branch`, `git_status` или `git_diff`; `git_list_files` экспортируется Git MCP-сервером, но chat orchestrator его не выбирает, а `git_repo_info` используется endpoint `GET /api/repository`.
 
 ## Agent, context и summary
 
@@ -451,3 +452,81 @@ npm run build
 ```
 
 Unit tests используют mock GitHub/DeepSeek: pagination, renamed/binary patches, changed-line validation, invalid structured output retry, empty diff, usage aggregation, persistence/conversation linkage, marker round-trip и безопасное обновление собственного comment. Реальный LLM нужен только для отдельного live smoke.
+
+## Day 34 — Autonomous Project File Agent
+
+Отдельная вкладка **File Agent** выполняет цели через настоящие файловые операции. Существующие Developer Assistant, `/help`, `/review`, Code Reviews и их SQLite-данные не заменены. Примеры, API и lifecycle: [docs/file-agent.md](docs/file-agent.md).
+
+### Архитектура
+
+```text
+React File Agent -> FastAPI file_agent/router.py -> service.py (durable jobs/history)
+  -> WorkspaceManager: private Git bundle -> isolated detached clone
+  -> FileAgent: bounded DeepSeek JSON-action loop -> existing official MCP client
+       -> file_agent.mcp_server (FastMCP/stdio) -> Files -> workspace only
+       -> exact literal search / related file reads / create / hash-checked patch
+       -> existing HybridRetriever (untrusted, SHA-labelled context)
+  -> validation.py + configurable rules.py -> Diff -> private patch artifacts
+```
+
+`agent.py` динамически выбирает инструменты из настоящего MCP discovery; сценарии не зашиты в orchestration. Поиск классов, импортов, вызовов и строк — точный, без LLM; RAG нужен для смысла и связей. RAG metadata показывает commit и `stale`; изменённый workspace не выдаётся за содержимое общего индекса. Текущие факты проверяются прямым чтением. Цикл ограничен числом действий, временем и накопленным объёмом контекста.
+
+Компоненты планирования изменений и patch application намеренно небольшие: модель выбирает точечную замену, backend проверяет SHA-256 и уникальность старого текста. Это не framework и не выполнение сгенерированного shell.
+
+### MCP File Tools
+
+| Tool | Реальная операция |
+|---|---|
+| `file_list` | relative scope, glob `pattern`, exclusions, bounded list |
+| `file_search` | bounded literal search в нескольких UTF-8 файлах, пути/строки |
+| `file_read` | numbered range, SHA-256 исходных байтов, тип/размер, redacted text |
+| `file_create` | atomic no-clobber создание нового файла |
+| `file_apply_patch` | одна точная уникальная замена `old_text/new_text` с `expected_hash` |
+| `file_diff` | полный или per-file redacted unified diff, включая untracked, +/- metadata |
+| `file_status` | изменения относительно HEAD, commit, workspace ID, change budget |
+| `file_validate` | безопасные Markdown/Java проверки без исполнения проекта |
+
+`rag_search` и `architecture_rules` — дополнительные orchestration tools, не выдаются за MCP. Существующие пять Git MCP tools сохранены отдельно.
+
+### Изоляция, безопасность и ограничения
+
+- Исходный `/repos/aurelSpa:ro` не меняется. Каждая задача получает standalone clone внутри `/data/file-agent/<task>-<id>`; Git worktree не используется, поскольку он записал бы metadata в read-only source.
+- Descriptor-based traversal и `O_NOFOLLOW` запрещают symlink, traversal и системные пути; `.git`, `.env*`, keys/credential-файлы и build directories недоступны модели. Hardlinks не используются. Git читает source через config-isolated view: hooks, helpers, replace objects и lazy fetch не исполняются. Shallow snapshot сохраняется; promisor/alternates/gitfile требуют предварительной доверенной standalone-копии.
+- Лимиты: 1 MB/файл и write operation, 2 000 файлов, 20 MB scan, 100 изменённых файлов, 5 MB совокупного before+after, tool timeout 30 s. В Docker по умолчанию 32 LLM-итерации, 1200 s/задача, 48 KB текущего и 1.5 MB накопленного контекста, до 8192 output tokens/ответ. Лимит изменений вычисляется заново по HEAD и переживает MCP restart.
+- Текст проекта и RAG — недоверенные данные, не инструкции. Redaction маскирует типовые assignment/JSON/XML/YAML credentials, bearer и private keys перед логированием и отправкой модели; это эвристика, а не гарантия обнаружения любого секрета. Не подключайте checkout с секретами, требующими абсолютной неразглашаемости.
+- Нет произвольных команд, `push`, автоматических source edits или запуска Maven plugins. Markdown проверяется по заголовкам/локальным ссылкам; Java — по лексическим эвристикам и правилам. Компиляция/тесты Java не исполняются: для них требуется отдельная доверенная sandbox. Успех patch не означает корректность программы.
+- REST API рассчитан на одного локального доверенного пользователя; bind только loopback, browser origin проверяется. Не публикуйте его в сеть без authentication/TLS. Не запускайте несколько backend workers с одной очередью SQLite.
+
+### Diff, Apply и воспроизводимость
+
+Результат сохраняется в workspace, история — в новой additive-таблице `file_agent_tasks` с JSON workspace/operations/changes/validation/usage. Существующие таблицы не изменяются. Реальные этапы доступны через polling UI и persistent SSE `/events`; скрытые рассуждения не отображаются.
+
+**Apply Changes** требует подтверждения и проверяет artifact hash, validation, source HEAD, index и исходные hashes/modes. Docker намеренно отказывает: source остаётся read-only. На trusted host запись включается отдельно `AI_HELPER_FILE_AGENT_ALLOW_SOURCE_APPLY=true`; конфликт не перезаписывается. **Discard Changes** удаляет только identity-checked owned workspace; artifacts сохраняются. Детали rollback и редкого partial-apply конфликта описаны в [документе](docs/file-agent.md).
+
+**Re-run Task** заново вызывает ту же модель на том же base snapshot с сохранёнными параметрами; результат не обязан быть побайтово одинаковым. **Replay patch** переносит уже сохранённый patch в новую чистую копию, проверяет integrity и повторяет валидацию без LLM. Приватные bundle + shallow metadata сохраняют базу даже после discard и изменения source refs. Preview diff редактируется и может усекаться; для точного replay используются только private artifacts.
+
+### Запуск и persistence
+
+```bash
+docker compose config --quiet
+docker compose up -d --build
+# Интерфейс localhost:3000 (или FRONTEND_PORT); backend localhost:8000 (BACKEND_PORT).
+```
+
+Compose использует существующие `assistant_data:/data` (SQLite, workspaces, private artifacts), `embedding_cache:/model-cache` и source bind `:ro`. Backend root filesystem read-only; временный `/tmp` — ограниченный 256 MB tmpfs, capabilities сняты, `no-new-privileges` включён. Docker socket, home, SSH keys и Git credentials не монтируются. Не выполняйте `down -v`. Дисковые bundles сохраняются после discard: администратор должен контролировать объём и удалять лишь явно выбранные архивы после резервного копирования.
+
+Ключ/модель берутся из существующего DeepSeek client/settings. Нового хранилища ключей нет. Для настройки бюджета используются `FILE_AGENT_MAX_ITERATIONS`, `FILE_AGENT_TIMEOUT_SECONDS`, `FILE_AGENT_MAX_OUTPUT_TOKENS` из `.env.example`; дополнительные backend-параметры перечислены в `backend/app/config.py`. Метрики показывают API tokens (либо помеченную оценку), время, число tools/LLM calls, прочитанных и изменённых файлов.
+
+### Проверки
+
+```bash
+cd backend
+../.venv-backend/bin/python -m pytest -p no:cacheprovider
+../.venv-backend/bin/python -m ruff check --no-cache app tests
+cd ../frontend
+npm test -- --run
+npm run typecheck
+npm run build
+```
+
+DeepSeek в unit/integration тестах mocked; MCP stdio и файловые операции реальные. Покрыты hash conflicts, traversal/symlink/races, secrets, source apply rollback, shallow snapshots, replay, history/SSE, timeout/error handling и restart recovery. Live демонстрация запускается явно через `scripts/day34_smoke.py --live`; результаты фактической проверки — в `summury.md`.

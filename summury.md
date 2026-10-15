@@ -210,3 +210,74 @@ Health проверен напрямую и через nginx; backend version `2
 - `aurelSpa` branch: `feature/ai-code-review`.
 - `aurelSpa` workflow commit: `5de94faa2fba1ebc18b55e4927cce5c3e5cf4fea`.
 - PR: `https://github.com/SlavaM1/aurelSpa/pull/1`, state open, merge не выполнялся.
+
+# Day 34 — Autonomous Project File Agent
+
+## Реализация и Git baseline
+
+- Чистая `dev/day32` и `origin/dev/day32` совпадали: `4f642f3b935fc53b106bb05b301d8cb9cf9ce50a`, ahead/behind `0/0`; выполнен fetch/prune. Создана `dev/day34`, без изменений Day 33 и без нового репозитория.
+- Исходный `/home/slava/ai/aurelSpa` сохранён на `dev/day33-ai@53d1c04e139db0fb4cff69ad34a4f975efe13cb2`; его ветка, исходники и Git metadata не изменяются File Agent. `ai-aurelspa-helper` не менялся. Изменения `aurelSpa` не коммитятся и не пушатся.
+- Новый отдельный модуль `backend/app/file_agent`: `agent.py` (bounded dynamic JSON actions), `service.py` (jobs/history/lifecycle), `router.py` (REST/SSE), `models.py` (additive SQLite), `files.py` (search/read/write/diff), `mcp_server.py` (official FastMCP), `workspace.py` (snapshots/artifacts/replay/apply), `validation.py`, `rules.py`.
+- React `FileAgent.tsx`, отдельные CSS/API/types: задача, выбор модели, история, прогресс, операции, result, usage/duration/files, real per-file diff, Open File, подтверждения Apply/Discard, Re-run Task и Replay patch. Существующие chat/reviews сохранены.
+
+## MCP, RAG и безопасность
+
+- Реальные MCP tools: `file_list`, `file_search`, `file_read`, `file_create`, `file_apply_patch`, `file_diff`, `file_status`, `file_validate`; официальный SDK/stdio, не обычные функции под вывеской MCP.
+- File Agent переиспользует `DeepSeekClient`, `GitMcpClient`, `HybridRetriever` и существующую SQLite. Дополнительные orchestration tools: `rag_search`, `architecture_rules`. Exact search не заменён RAG; retrieval помечает snapshot/staleness, прямое чтение — источник актуального текста.
+- Snapshot — standalone Git clone из private base bundle, не worktree (source mount остаётся `:ro`). Поддержан реальный shallow `aurelSpa`; base bundle и shallow boundary переживают discard и перемещение source refs.
+- Доступ descriptor-confined с `O_NOFOLLOW`; запрещены traversal, symlinks, hardlinks, secrets paths, бинарные правки, `.git/.env`, системные пути. Есть hash concurrency, no-clobber create, limits/timeouts, persistent change budget, redaction и untrusted-data instructions.
+- Apply — только явное подтверждение и trusted writable host opt-in, с проверками base/index/hashes/modes, предварительным staging и rollback. В Docker отказ ожидаем: исходник read-only. Возможный partial apply из-за внешних конкурентных правок явно переводит задачу в failed, а не маскируется успешным результатом.
+- SQLite `file_agent_tasks` хранит goal/model/parameters/base/workspace/operations/read files/changes/validation/usage/timestamps/results/errors. Exact patch/payload/hash metadata/base bundle находятся вне model-accessible checkout, в `/data/file-agent/.file-agent-owners/`. Публичный diff/patch — только redacted preview.
+
+## Независимый Code Review и исправления
+
+Подтверждены и исправлены:
+
+1. Git source config/lazy-fetch мог исполнять upload-pack: введён config-isolated Git view, запрет promisor/alternates, отключён lazy fetch и replace objects.
+2. Ошибка второго файла могла оставлять первый применённым: staging, общее revalidation/lock, CAS rollback и явный `PartialApplyError`.
+3. XML/YAML credentials (включая Spring property/entry, block/continued/quoted values) могли проходить redaction: исправлены text filters с сохранением строк; structured dict results редактируются по sensitive keys.
+4. Replay зависел от текущих source refs: добавлен private integrity-checked bundle/base boundary; service rerun использует сохранённый parent snapshot.
+5. Alternate frontend port отклонялся origin guard: nginx сохраняет `$http_host`; добавлены origin regression tests.
+6. Недостающие file_list glob/exclusions и file_status commit/workspace metadata добавлены.
+7. Архитектурное правило ошибочно находило нарушения в Markdown-отчёте: ограничено Java-кодом; добавлен тест.
+8. Live ADR исчерпал контекст до write: уменьшено rolling context до 48 KB, введена обратная связь об оставшихся итерациях, компактное запоминание write actions и bounded exploration guidance.
+9. При проверке LLM-текста обнаружены выдуманная дата и неверное обобщение conditional fallback: добавлены актуальная UTC date/base SHA и инструкции не выдумывать принятие ADR/исторические причины, точно описывать ветвления. Генерация всё равно требует человеческого review.
+10. SQLite naive UTC timestamps теперь сериализуются с timezone для правильной длительности в браузере; отсутствующий provider usage получает явно помеченную оценку.
+
+Ранние неудачные live задачи и их artifacts сохранены в истории, не выданы за успех.
+
+## Тесты и ограничения
+
+- Backend: **112 passed** локально Python 3.14 и **112 passed** в Docker Python 3.12; включает Day 31–32 regressions, mocked DeepSeek + реальный MCP/files/Git, security/races/rollback, shallow lifecycle, tamper/stale hashes, RAG, history/SSE/restart, rerun/replay, origin, token fallback и UTC timestamps.
+- Ruff: **passed** (`--no-cache`; существующие root-owned local cache/egg-info не удалялись).
+- Frontend: **23 passed**, typecheck и production build passed. Playwright smoke: вкладка File Agent открывается, история загружается, desktop/mobile screenshots, нет JS exceptions и overflow на 390 px.
+- Проверены существующие `/help` и `/review` через настоящий SSE API: `done`, без `error`. До работ было 9 conversations / 28 messages / 14 Code Reviews; создан только отдельный regression conversation, пользовательская история не удалялась.
+- Проверки проекта — Markdown structure/local links и Java lexical/architecture heuristics. Maven compilation/tests не запускались, произвольные команды модели запрещены. Это не доказательство корректности или полного покрытия.
+- Single-user localhost backend, один worker; нет authentication, распределённой очереди, автоматического GC архивов, полного Java AST/call graph или универсального secret scanner. Prompt injection mitigated, не заявлена математическая гарантия защиты LLM.
+- Документация: `README.md` → Day 34, примеры и lifecycle `docs/file-agent.md`; opt-in live runner `scripts/day34_smoke.py`.
+
+## Реальные демонстрации и artifacts
+
+Модель `deepseek-flash`, snapshot `53d1c04e139db0fb4cff69ad34a4f975efe13cb2`. Машиночитаемая фиксация IDs/hashes/метрик: `docs/day34-verification.json`.
+
+| Сценарий | Task ID | Прочитано существующих файлов | Результат |
+|---|---|---:|---|
+| API + сервисный слой | `7496d422-92c4-4c2b-9e9d-39506528bfdc` | 10 | `docs/api-overview.md`, +115 строк |
+| Controller/repository | `87269d9a-2296-4ee6-b3a1-94393cb3b89c` | 5 | `docs/controller-repository-report.md`, +73 строки |
+| Авторизация + RAG | `5f32eb0e-73e7-49f1-83bf-a3dc59a95ee3` | 8 | `docs/adr/0001-authentication-architecture.md`, +67 строк |
+
+Итого **20 уникальных существующих файлов** (23, если считать также три созданных документа), **42 успешных вызова file_read**. Выполнены три `file_create` и реальный `file_apply_patch` ADR, затем diff и validation. Сценарий 1 прочитал реальные `MainService`, `MarketService`, `UserService` и контроллеры; сценарий 2 нашёл прямые зависимости в `OrderDetailsUserController`, `CertificateController`, `PromoCodeController`, с подтверждёнными полями/вызовами и явно ограниченным охватом. Сценарий 3 прочитал security config, identity/role/service и три support security компонента; выполнено два успешных RAG retrieval.
+
+Все три задачи `completed`, финальные проверки successful. После последней security/Docker сборки **каждый patch заново replay-нут без LLM**, diff совпал побайтово с redacted preview исходной задачи, validation successful. Дополнительный QA replay ADR затем безопасно discarded; оригинальные demo workspace сохранены. AI-rerun с тем же snapshot/параметрами покрыт integration test; побайтовое совпадение LLM rerun не обещается.
+
+Workspace находятся в `/data/file-agent/<workspace-id>` контейнера; точные diff artifacts — `/data/file-agent/.file-agent-owners/<workspace-id>.patch` (private, mode 0600). ID workspace и SHA-256 перечислены в `docs/day34-verification.json`. Public JSON/redacted previews последних live запусков: `/tmp/opencode/day34-demos-verified` (сценарии 1/3), `/tmp/opencode/day34-demos-final` (сценарий 2). Содержимое Git bundle/raw patch не коммитится в `ai-helper`.
+
+## Docker, health и persistence — финальная проверка
+
+- Backend/frontend production images пересобраны; `ai-helper-backend-1`, `ai-helper-frontend-1` запущены. UI **http://localhost:3010**, API **http://localhost:8010**.
+- Health напрямую и через nginx: `ok`, DeepSeek configured, repository available. Compose config valid; source mount всё ещё read-only. Backend root filesystem read-only, `/tmp` limited tmpfs, capabilities `ALL` dropped, no-new-privileges.
+- Проверены real File MCP в Docker и сохранённый diff каждой demo задачи после restart. Подтверждённый browser Apply вернул ожидаемый 409 «source apply disabled», не меняя source; Open File и diff отрисованы. Исправлен обнаруженный mobile overflow длинного сообщения об отказе; повторная проверка 390 px — overflow false, JS errors 0.
+- До/после финального restart одинаково: **10 conversations, 32 messages, 14 Code Reviews, 206 RAG documents, 915 chunks, 19 file tasks**. Старые Day 31–32 записи сохранены; рост RAG 911 → 915 связан с штатным reindex текущего source snapshot. `down -v` не выполнялся.
+- Docker test runner первоначально отказал в исполнении `pip` script из noexec tmpfs; исправлен только test invocation (`python -m pip`). Runtime-защита не ослаблялась; итоговый Docker pytest 112/112.
+
+Final commit SHA указывается в delivery response после commit/push, чтобы не создавать самоссылочный Git object. Runtime-конфигурация для текущего развёртывания сохранена в приватном `/tmp/opencode/day34-compose.env` (0600), не в Git; для обычного запуска настройте локальный `.env` по `.env.example`.

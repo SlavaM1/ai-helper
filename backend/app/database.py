@@ -60,6 +60,7 @@ SessionLocal = sessionmaker(bind=engine, class_=Session, expire_on_commit=False)
 def init_db(target_engine: Engine = engine) -> None:
     # Importing registers all model tables on Base.metadata.
     from . import models  # noqa: F401
+    from .file_agent import models as file_agent_models  # noqa: F401
 
     Base.metadata.create_all(target_engine)
 

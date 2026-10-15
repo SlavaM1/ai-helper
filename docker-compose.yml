@@ -14,13 +14,26 @@ services:
       GITHUB_REPOSITORY: ${GITHUB_REPOSITORY:-SlavaM1/aurelSpa}
       TARGET_REPO_PATH: /repos/aurelSpa
       AI_HELPER_AUTO_INDEX: ${AI_HELPER_AUTO_INDEX:-true}
+      AI_HELPER_FILE_AGENT_STORAGE: /data/file-agent
+      AI_HELPER_FILE_AGENT_ALLOW_SOURCE_APPLY: "false"
+      AI_HELPER_FILE_AGENT_MAX_ITERATIONS: ${FILE_AGENT_MAX_ITERATIONS:-32}
+      AI_HELPER_FILE_AGENT_TIMEOUT_SECONDS: ${FILE_AGENT_TIMEOUT_SECONDS:-1200}
+      AI_HELPER_FILE_AGENT_MAX_OUTPUT_TOKENS: ${FILE_AGENT_MAX_OUTPUT_TOKENS:-8192}
       FASTEMBED_CACHE_PATH: /model-cache
+      HF_HOME: /model-cache/huggingface
     volumes:
       - assistant_data:/data
       - embedding_cache:/model-cache
       - ${TARGET_REPO_HOST_PATH:-../aurelSpa}:/repos/aurelSpa:ro
     ports:
       - "127.0.0.1:${BACKEND_PORT:-8000}:8000"
+    read_only: true
+    tmpfs:
+      - /tmp:size=268435456,mode=1777
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
     restart: unless-stopped
 
   frontend:

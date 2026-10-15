@@ -22,6 +22,15 @@ function setup() {
 }
 
 describe('ConversationSidebar', () => {
+  it('открывает File Agent, сохраняя навигацию чата и reviews', async () => {
+    const callbacks = setup()
+    await userEvent.click(screen.getByRole('button', { name: 'File Agent' }))
+    expect(callbacks.onViewChange).toHaveBeenCalledWith('file-agent')
+    expect(callbacks.onClose).toHaveBeenCalled()
+    expect(screen.getByRole('button', { name: 'Code Reviews' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Чат' })).toBeInTheDocument()
+  })
+
   it('открывает раздел code reviews', async () => {
     const callbacks = setup()
     await userEvent.click(screen.getByRole('button', { name: 'Code Reviews' }))

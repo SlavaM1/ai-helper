@@ -1,0 +1,126 @@
+.fa-workspace { min-width: 0; min-height: 0; flex: 1; display: flex; flex-direction: column; background: var(--ink); color: var(--text); font-size: 12px; }
+.fa-workspace > .error-banner > span { min-width: 0; flex: 1; overflow-wrap: anywhere; }
+.fa-workspace > .error-banner > button { flex-shrink: 0; }
+.fa-topbar { min-height: 72px; padding: 12px 22px; display: flex; align-items: center; gap: 12px; border-bottom: 1px solid var(--line); }
+.fa-topbar > svg { width: 20px; flex-shrink: 0; color: var(--cyan); }
+.fa-topbar h1 { margin: 0 0 3px; font-size: 15px; letter-spacing: -.02em; }
+.fa-topbar span { color: var(--muted); font-size: 10px; }
+.fa-topbar .fa-topbar__refresh { margin-left: auto; }
+.fa-button { min-height: 32px; padding: 6px 10px; display: inline-flex; align-items: center; justify-content: center; gap: 6px; border: 1px solid var(--line); border-radius: 5px; background: var(--raised); color: var(--text); font-size: 11px; }
+.fa-button svg { width: 13px; flex-shrink: 0; }
+.fa-button:hover:not(:disabled) { background: var(--hover); border-color: var(--muted); }
+.fa-button--primary, .fa-button[aria-pressed="true"] { color: var(--cyan); border-color: #30545a; background: var(--cyan-soft); }
+.fa-button--danger { color: var(--danger); }
+.fa-layout { min-height: 0; flex: 1; display: grid; grid-template-columns: 220px minmax(0, 1fr); }
+.fa-history { min-height: 0; padding: 16px 10px; overflow-y: auto; border-right: 1px solid var(--line); background: var(--panel); }
+.fa-section-heading { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; }
+.fa-workspace h2 { margin: 0; font-size: 13px; font-weight: 600; }
+.fa-caption { margin: 10px 0; color: var(--muted); font-size: 10px; line-height: 1.7; overflow-wrap: anywhere; }
+.fa-task { width: 100%; padding: 13px 8px; display: flex; flex-direction: column; gap: 7px; border: 0; border-bottom: 1px solid var(--line-soft); border-left: 2px solid transparent; color: var(--text); background: transparent; text-align: left; }
+.fa-task:hover { background: var(--raised); }
+.fa-task.is-active { border-left-color: var(--cyan); background: var(--hover); }
+.fa-task strong { display: -webkit-box; overflow: hidden; -webkit-line-clamp: 3; -webkit-box-orient: vertical; font-size: 11px; font-weight: 500; line-height: 1.65; overflow-wrap: anywhere; }
+.fa-task time, .fa-task > code { color: var(--muted); font-size: 9px; overflow-wrap: anywhere; }
+.fa-status { color: var(--muted); font-size: 10px; }
+.fa-status--running, .fa-status--completed, .fa-status--applied { color: var(--cyan); }
+.fa-status--failed { color: var(--danger); }
+.fa-main { min-width: 0; min-height: 0; overflow-y: auto; }
+.fa-compose { padding: 20px 22px 15px; border-bottom: 1px solid var(--line); }
+.fa-compose > label { display: block; margin-bottom: 9px; font-size: 12px; font-weight: 600; }
+.fa-compose textarea { width: 100%; min-height: 86px; max-height: 300px; padding: 10px 12px; resize: vertical; border: 1px solid var(--line); border-radius: 5px; color: var(--text); background: var(--panel); font-size: 12px; line-height: 1.7; }
+.fa-compose textarea::placeholder { color: var(--muted); }
+.fa-compose__controls { margin-top: 9px; display: flex; justify-content: space-between; align-items: center; gap: 10px; }
+.fa-compose__controls label { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 10px; }
+.fa-compose select { max-width: 220px; min-height: 32px; padding: 4px 8px; color: var(--text); border: 1px solid var(--line); border-radius: 4px; background: var(--panel); font-size: 11px; }
+.fa-suggestions { margin-top: 12px; color: var(--muted); font-size: 11px; }
+.fa-suggestions summary, .fa-details summary { cursor: pointer; width: fit-content; }
+.fa-suggestions > div { margin-top: 7px; display: grid; grid-template-columns: 1fr 1fr; gap: 6px 14px; }
+.fa-suggestions button { padding: 8px 0; color: var(--muted); border: 0; border-bottom: 1px solid var(--line-soft); background: transparent; text-align: left; font-size: 10px; line-height: 1.7; }
+.fa-suggestions button:hover { color: var(--text); }
+.fa-execution { padding: 18px 22px; }
+.fa-task-prompt { max-width: 78ch; margin: 12px 0; white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.75; }
+.fa-workspace code, .fa-workspace pre { font-family: 'IBM Plex Mono', monospace; }
+.fa-section-heading h2 code { margin-left: 5px; font-size: 10px; color: var(--muted); font-weight: 400; }
+.fa-provenance { display: flex; flex-wrap: wrap; gap: 7px 16px; color: var(--muted); font-size: 10px; overflow-wrap: anywhere; }
+.fa-provenance span { min-width: 0; }
+.fa-provenance code { color: var(--text); font-size: 10px; }
+.fa-metrics { margin: 16px 0; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); border-top: 1px solid var(--line-soft); border-bottom: 1px solid var(--line-soft); }
+.fa-metrics > div { padding: 10px 8px; border-right: 1px solid var(--line-soft); }
+.fa-metrics > div:first-child { padding-left: 0; }
+.fa-metrics > div:last-child { border: 0; }
+.fa-metrics dt, .fa-metrics small { color: var(--muted); font-size: 9px; line-height: 1.7; }
+.fa-metrics dd { margin: 5px 0 0; font: 12px/1.6 'IBM Plex Mono', monospace; }
+.fa-current-operation { padding: 8px 0; color: var(--cyan); font-size: 10px; }
+.fa-actions { display: flex; flex-wrap: wrap; gap: 7px; }
+.fa-host-notice { margin: 12px 0; padding: 10px 12px; border-left: 2px solid var(--line); background: var(--panel); color: var(--muted); font-size: 10px; line-height: 1.8; }
+.fa-host-notice strong { color: var(--text); font-size: 11px; font-weight: 500; }
+.fa-host-notice p { margin: 5px 0 0; max-width: 90ch; overflow-wrap: anywhere; }
+.fa-details { padding: 11px 0; border-top: 1px solid var(--line-soft); color: var(--muted); font-size: 11px; }
+.fa-details p { line-height: 1.8; max-width: 78ch; }
+.fa-details pre { max-height: 300px; padding: 12px; overflow: auto; background: var(--panel); font-size: 10px; line-height: 1.7; }
+.fa-operations { max-height: 260px; padding: 0; overflow-y: auto; list-style: none; }
+.fa-operations li { padding: 6px 0; display: flex; flex-wrap: wrap; gap: 7px 12px; border-bottom: 1px solid var(--line-soft); font-size: 10px; overflow-wrap: anywhere; }
+.fa-operations li > code:first-of-type { color: var(--text); }
+.fa-error, .fa-removed { color: var(--danger); }
+.fa-added { color: #91d5b0; }
+.fa-error { line-height: 1.8; overflow-wrap: anywhere; }
+.fa-notice { margin: 10px 18px 0; padding: 8px 10px; border: 1px solid #30545a; border-radius: 5px; background: var(--cyan-soft); color: var(--text); line-height: 1.7; }
+.fa-result { padding-top: 10px; border-top: 1px solid var(--line-soft); }
+.fa-result h3 { font-size: 12px; }
+.fa-result .markdown { font-size: 12px; max-width: 78ch; }
+.fa-result pre { overflow: auto; padding: 10px; background: var(--panel); }
+.fa-result code { font-size: 11px; }
+.fa-inspector { min-height: 280px; margin: 0 22px 22px; display: grid; grid-template-columns: 190px minmax(0, 1fr); border: 1px solid var(--line); border-radius: 5px; overflow: hidden; }
+.fa-files { max-height: 570px; padding: 12px 0; overflow: auto; border-right: 1px solid var(--line); background: var(--panel); }
+.fa-files h2, .fa-files > p { margin-left: 10px; margin-right: 10px; }
+.fa-files h2 { font-size: 11px; }
+.fa-files button { width: 100%; min-height: 44px; padding: 9px 10px; display: flex; flex-direction: column; gap: 6px; border: 0; border-left: 2px solid transparent; color: var(--text); background: transparent; text-align: left; }
+.fa-files button:hover { background: var(--raised); }
+.fa-files button.is-active { border-left-color: var(--cyan); background: var(--hover); }
+.fa-files button code { font-size: 10px; overflow-wrap: anywhere; }
+.fa-files button span { color: var(--muted); font-size: 9px; }
+.fa-files button b { font-weight: 400; }
+.fa-preview { min-width: 0; background: var(--ink); }
+.fa-preview__toolbar { min-height: 48px; padding: 8px 10px; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; border-bottom: 1px solid var(--line); background: var(--panel); }
+.fa-preview__toolbar > code { flex: 1 1 100px; color: var(--muted); font-size: 10px; overflow-wrap: anywhere; }
+.fa-preview__meta { padding: 0 12px; color: var(--muted); font-size: 9px; line-height: 1.8; overflow-wrap: anywhere; }
+.fa-diff, .fa-source { max-height: 440px; margin: 0; padding: 12px 0; overflow: auto; font-size: 11px; line-height: 1.8; tab-size: 4; }
+.fa-source { padding: 12px; }
+.fa-diff span { display: block; width: max-content; min-width: 100%; padding: 0 12px; white-space: pre; }
+.fa-diff__added { color: #91d5b0; background: rgba(90, 175, 124, .10); }
+.fa-diff__removed { color: var(--danger); background: rgba(238, 123, 123, .10); }
+.fa-diff__hunk { color: var(--cyan); background: var(--cyan-soft); }
+.fa-empty { margin: 0; padding: 20px 14px; color: var(--muted); font-size: 11px; line-height: 1.8; }
+.fa-empty .fa-button { margin: 10px 0; display: flex; }
+.fa-export-notice { padding: 0 12px; }
+.fa-confirm { max-height: 85vh; overflow-y: auto; }
+.fa-confirm p + p { margin-top: 12px; }
+.fa-confirm p code { overflow-wrap: anywhere; font-size: 11px; }
+.fa-confirm ul { padding-left: 20px; color: var(--muted); font-size: 11px; line-height: 1.8; overflow-wrap: anywhere; }
+@media (max-width: 1250px) {
+  .fa-layout { grid-template-columns: 180px minmax(0, 1fr); }
+  .fa-inspector { grid-template-columns: 150px minmax(0, 1fr); }
+  .fa-metrics { grid-template-columns: 1fr 1fr; }
+  .fa-metrics > div:nth-child(2) { border-right: 0; }
+}
+@media (max-width: 900px) {
+  .fa-layout { display: block; overflow-y: auto; }
+  .fa-history { max-height: 185px; border-right: 0; border-bottom: 1px solid var(--line); }
+  .fa-history nav { display: flex; gap: 8px; overflow-x: auto; }
+  .fa-task { flex: 0 0 210px; }
+  .fa-task strong { -webkit-line-clamp: 2; }
+  .fa-main { overflow: visible; }
+  .fa-history > .fa-caption { margin: 4px 0; }
+  .fa-task time { display: none; }
+}
+@media (max-width: 600px) {
+  .fa-topbar { padding: 10px 12px; flex-wrap: wrap; gap: 8px; }
+  .fa-topbar > div { flex: 1; }
+  .fa-topbar .fa-topbar__refresh { margin-left: 0; }
+  .fa-compose, .fa-execution { padding: 15px 12px; }
+  .fa-inspector { margin: 0 12px 16px; grid-template-columns: minmax(0, 1fr); }
+  .fa-files { max-height: 190px; border-right: 0; border-bottom: 1px solid var(--line); }
+  .fa-suggestions > div { grid-template-columns: 1fr; }
+  .fa-compose__controls { flex-wrap: wrap; }
+  .fa-compose select { max-width: 190px; }
+}

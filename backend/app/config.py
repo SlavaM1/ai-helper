@@ -45,6 +45,17 @@ class Settings(BaseSettings):
     review_max_diff_chars: int = Field(default=100_000, ge=10_000, le=500_000)
     review_max_output_tokens: int = Field(default=8_192, ge=1_024, le=16_384)
     review_min_confidence: float = Field(default=0.6, ge=0, le=1)
+    file_agent_storage: str = "/data/file-agent"
+    file_agent_max_iterations: int = Field(default=32, ge=1, le=64)
+    file_agent_max_output_tokens: int = Field(default=8192, ge=1024, le=16384)
+    file_agent_max_context_bytes: int = Field(default=48_000, ge=24_000, le=500_000)
+    file_agent_max_cumulative_context_bytes: int = Field(default=1_500_000, ge=24_000, le=10_000_000)
+    file_agent_tool_timeout_seconds: float = Field(default=30, ge=1, le=120)
+    file_agent_timeout_seconds: float = Field(default=600, ge=30, le=1800)
+    file_agent_allow_source_apply: bool = False
+    file_agent_rules: list[str] = Field(default_factory=lambda: [
+        "controller-repository", "hardcoded-credentials", "migration-naming",
+    ])
 
     model_config = SettingsConfigDict(
         env_prefix="AI_HELPER_",

@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState } from 'react'
 import type { Conversation } from '../types'
-import { ChatIcon, CloseIcon, EditIcon, PlusIcon, ReviewIcon, SparkIcon, TrashIcon } from './Icons'
+import { ChatIcon, CloseIcon, EditIcon, FileIcon, PlusIcon, ReviewIcon, SparkIcon, TrashIcon } from './Icons'
 
-export type AppView = 'chat' | 'reviews'
+export type AppView = 'chat' | 'reviews' | 'file-agent'
 
 interface Props {
   conversations: Conversation[]
@@ -53,6 +53,9 @@ export function ConversationSidebar({ conversations, activeId, open, loading, vi
           </button>
           <button className={view === 'reviews' ? 'is-active' : ''} type="button" onClick={() => { onViewChange('reviews'); onClose() }}>
             <ReviewIcon /><span>Code Reviews</span>
+          </button>
+          <button className={view === 'file-agent' ? 'is-active' : ''} type="button" onClick={() => { onViewChange('file-agent'); onClose() }}>
+            <FileIcon /><span>File Agent</span>
           </button>
         </nav>
         <button className="new-chat" type="button" onClick={onCreate} disabled={loading}>

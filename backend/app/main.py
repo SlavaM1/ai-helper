@@ -19,6 +19,8 @@ from .agent.orchestrator import _event
 from .config import get_settings
 from .crud import ConversationNotFoundError, ConversationService, RagService
 from .database import SessionLocal, get_db, init_db
+from .file_agent.router import router as file_agent_router
+from .file_agent.service import FileAgentService
 from .mcp_tools import GitMcpClient
 from .models import MessageRole
 from .rag import HybridRetriever, RagIndexer
@@ -72,10 +74,14 @@ def _run_index() -> None:
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     init_db()
+    app.state.file_agent_service.recover()
     repo = Path(settings.target_repo_path)
     if settings.auto_index and repo.is_dir():
         asyncio.create_task(asyncio.to_thread(_run_index))
-    yield
+    try:
+        yield
+    finally:
+        await app.state.file_agent_service.close()
 
 
 app = FastAPI(
@@ -90,6 +96,8 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+app.state.file_agent_service = FileAgentService(settings, llm, SessionLocal)
+app.include_router(file_agent_router)
 
 Db = Annotated[Session, Depends(get_db)]
 
