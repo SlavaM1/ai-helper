@@ -71,9 +71,12 @@ class FileAgent:
         self.read_files: set[str] = set()
         self.empty_workspace = False
         self.deadline: float | None = None
+        self.should_stop: Callable[[], bool] = lambda: False
         self.usage: dict[str, int] = {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0, "llm_calls": 0, "context_bytes": 0}
 
     async def operation(self, name: str, arguments: dict, action: Callable, *, phase: str = "tools") -> Any:
+        if self.should_stop():
+            raise asyncio.CancelledError
         # Never persist proposed file content or provider private reasoning.
         summary = {key: val for key, val in arguments.items() if key in {
             "path", "paths", "query", "start_line", "end_line", "max_lines", "expected_hash", "limit", "iteration",
@@ -156,6 +159,8 @@ class FileAgent:
         messages = [{"role": "system", "content": system}, {"role": "user", "content": prompt}]
         cumulative = 0
         for iteration in range(parameters["max_iterations"]):
+            if self.should_stop():
+                raise asyncio.CancelledError
             if self.deadline is not None and time.monotonic() >= self.deadline:
                 raise TimeoutError
             remaining = parameters["max_iterations"] - iteration

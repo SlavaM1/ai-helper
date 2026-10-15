@@ -7,9 +7,9 @@ import type { ModelInfo } from '../types'
 import { AlertIcon, FileIcon, MenuIcon, RefreshIcon } from './Icons'
 import './FileAgent.css'
 
-const active = (task?: FileAgentTask) => task?.status === 'queued' || task?.status === 'running'
+const active = (task?: FileAgentTask) => task?.status === 'queued' || task?.status === 'running' || task?.status === 'stopping'
 const errorText = (error: unknown) => error instanceof Error ? error.message : 'Неизвестная ошибка API'
-const statusLabel = (status: string) => ({ queued: 'В очереди', running: 'Выполняется', completed: 'Готово к проверке', failed: 'Ошибка', applied: 'Применено к исходникам', discarded: 'Изменения отброшены' })[status] ?? status
+const statusLabel = (status: string) => ({ queued: 'В очереди', running: 'Выполняется', stopping: 'Останавливается', cancelled: 'Остановлена', completed: 'Готово к проверке', failed: 'Ошибка', applied: 'Применено к исходникам', discarded: 'Изменения отброшены' })[status] ?? status
 const suggestions = [
   'Найди использования компонента: укажи имя сервиса. Прочитай связанные файлы и объясни связи со ссылками на строки.',
   'Обнови API-документацию: найди контроллеры, связанные service/DTO и создай docs/api-overview.md по реальному коду.',
@@ -45,7 +45,7 @@ function duration(task: FileAgentTask, now: number) {
   return Number.isFinite(seconds) ? `${Math.floor(seconds / 60)}м ${seconds % 60}с${task.finished_at ? '' : ' · идёт'}` : '—'
 }
 
-interface Confirmation { action: 'apply' | 'discard'; task: FileAgentTask }
+interface Confirmation { action: 'apply' | 'discard' | 'deleteHistory'; task: FileAgentTask }
 
 function LifecycleConfirmation({ value, busy, onCancel, onConfirm }: { value?: Confirmation; busy: boolean; onCancel: () => void; onConfirm: () => void }) {
   const dialogRef = useRef<HTMLDialogElement>(null)
@@ -55,14 +55,15 @@ function LifecycleConfirmation({ value, busy, onCancel, onConfirm }: { value?: C
     if (!value && dialog?.open) dialog.close()
   }, [value])
   const applying = value?.action === 'apply'
+  const deleting = value?.action === 'deleteHistory'
   return <dialog ref={dialogRef} className="confirm-dialog fa-confirm" aria-labelledby="fa-confirm-title" onCancel={(event) => { event.preventDefault(); if (!busy) onCancel() }}>
-    <h2 id="fa-confirm-title">{applying ? 'Apply Changes?' : 'Discard Changes?'}</h2>
-    <p>{applying ? 'Применить проверенный артефакт к исходному репозиторию. Это изменит файлы на хосте, но не создаст коммит. При конфликте или read-only доступе операция будет отклонена.' : 'Удалить изолированную рабочую копию. Исходный репозиторий не изменится. Сохранённый приватный артефакт останется доступен для Replay patch.'}</p>
+    <h2 id="fa-confirm-title">{applying ? 'Apply Changes?' : deleting ? 'Удалить задачу из истории?' : 'Discard Changes?'}</h2>
+    <p>{applying ? 'Применить проверенный артефакт к исходному репозиторию. Это изменит файлы на хосте, но не создаст коммит. При конфликте или read-only доступе операция будет отклонена.' : deleting ? 'Задача исчезнет из истории и будет недоступна через интерфейс. Рабочая копия, приватные артефакты и служебная запись в SQLite сохранятся для воспроизводимости связанных запусков. Это не удаление файлов и не откат применённых изменений. Для удаления рабочей копии сначала используйте Discard Changes.' : 'Удалить изолированную рабочую копию. Исходный репозиторий не изменится. Сохранённый приватный артефакт останется доступен для Replay patch.'}</p>
     <p>Base SHA: <code>{value?.task.base_sha || 'неизвестен'}</code></p>
     {applying && <p>Artifact SHA-256: <code>{value?.task.workspace.artifact?.sha256}</code></p>}
     <ul>{value?.task.changes.map((change) => <li key={change.path}><code>{change.path}</code> ({change.status})</li>)}</ul>
     {!value?.task.changes.length && <p>Нет зафиксированных изменений файлов.</p>}
-    <div><button className="button-secondary" type="button" onClick={onCancel} disabled={busy} autoFocus>Отмена</button><button className={applying ? 'button-secondary' : 'button-danger'} type="button" onClick={onConfirm} disabled={busy}>{busy ? 'Выполняется…' : applying ? 'Confirm Apply Changes' : 'Confirm Discard Changes'}</button></div>
+    <div><button className="button-secondary" type="button" onClick={onCancel} disabled={busy} autoFocus>Отмена</button><button className={applying ? 'button-secondary' : 'button-danger'} type="button" onClick={onConfirm} disabled={busy}>{busy ? 'Выполняется…' : applying ? 'Confirm Apply Changes' : deleting ? 'Удалить из истории' : 'Confirm Discard Changes'}</button></div>
   </dialog>
 }
 
@@ -116,7 +117,13 @@ export function FileAgent({ onMenu, models, initialModel, modelError }: Props) {
       try {
         const items = await fileAgentApi.history(controller.signal)
         if (controller.signal.aborted || requestRevision !== revision.current) return
-        setTasks((current) => mergeTasks(current, items))
+        setTasks((current) => mergeTasks(current.filter((task) => items.some((item) => item.id === task.id)), items))
+        if (selectedRef.current && !items.some((task) => task.id === selectedRef.current)) {
+          selectionVersion.current += 1
+          selectedRef.current = undefined
+          setSelectedId(undefined)
+          setPath('')
+        }
         if (!selectedRef.current && selectionVersion.current === 0 && items[0]) {
           selectedRef.current = items[0].id
           setSelectedId(items[0].id)
@@ -174,7 +181,7 @@ export function FileAgent({ onMenu, models, initialModel, modelError }: Props) {
     setNotice(undefined)
   }
 
-  const mutate = async (action: 'create' | 'rerun' | 'replay' | 'apply' | 'discard', target?: FileAgentTask) => {
+  const mutate = async (action: 'create' | 'rerun' | 'replay' | 'apply' | 'discard' | 'stop' | 'deleteHistory', target?: FileAgentTask) => {
     if (mutationBusy.current || (action === 'create' && !prompt.trim())) return
     mutationBusy.current = true
     setBusy(true)
@@ -187,6 +194,16 @@ export function FileAgent({ onMenu, models, initialModel, modelError }: Props) {
     try {
       let task: FileAgentTask
       if (action === 'create') task = await fileAgentApi.create(prompt.trim(), model, controller.signal)
+      else if (action === 'deleteHistory') {
+        if (!target) throw new Error('Выберите задачу')
+        await fileAgentApi.deleteHistory(target.id, controller.signal)
+        if (!alive.current || controller.signal.aborted) return
+        revision.current += 1
+        setTasks((current) => current.filter((item) => item.id !== target.id))
+        if (selectedRef.current === target.id) selectTask()
+        setNotice('Задача удалена из истории. Файлы проекта не изменены.')
+        return
+      }
       else {
         if (!target) throw new Error('Выберите задачу')
         if (action === 'apply') {
@@ -199,7 +216,7 @@ export function FileAgent({ onMenu, models, initialModel, modelError }: Props) {
       setTasks((current) => mergeTasks(current, [task]))
       if (selectionVersion.current === version) {
         selectTask(task.id)
-        setNotice(action === 'apply' ? 'Сервер подтвердил применение изменений к исходному репозиторию.' : action === 'discard' ? 'Рабочая копия удалена. Исходники не изменены.' : 'Задача сохранена и поставлена в очередь. Исходники не изменены.')
+        setNotice(action === 'apply' ? 'Сервер подтвердил применение изменений к исходному репозиторию.' : action === 'discard' ? 'Рабочая копия удалена. Исходники не изменены.' : action === 'stop' ? 'Остановка запрошена. Новые вызовы модели не запускаются; текущая файловая операция безопасно завершается.' : 'Задача сохранена и поставлена в очередь. Исходники не изменены.')
       }
     } catch (reason) {
       if (alive.current && !controller.signal.aborted) setError(`${action === 'apply' ? 'Изменения не применены' : 'Операция не выполнена'}: ${errorText(reason)}`)
@@ -258,11 +275,13 @@ export function FileAgent({ onMenu, models, initialModel, modelError }: Props) {
             {!selected.usage.estimated && selected.usage.total_tokens === 0 && <p className="fa-caption">Токены получены из usage API, не оценены. Нулевое значение также возможно, если провайдер не вернул usage.</p>}
             {selected.error && <p className="fa-error" role="alert">{selected.error}</p>}
             <div className="fa-actions">
+              <button className="fa-button fa-button--danger" type="button" disabled={!active(selected) || selected.status === 'stopping' || busy} onClick={() => void mutate('stop', selected)}>{selected.status === 'stopping' ? 'Останавливается…' : 'Остановить'}</button>
               <button className="fa-button" type="button" disabled={!workspaceAvailable} onClick={() => { setMode('diff'); setInspectionRefresh((value) => value + 1); document.getElementById('fa-inspector')?.focus() }}>View Diff</button>
               <button className="fa-button" type="button" disabled={!idle || busy} onClick={() => void mutate('rerun', selected)}>Re-run Task</button>
               <button className="fa-button" type="button" disabled={!idle || busy || !selected.workspace.artifact} onClick={() => void mutate('replay', selected)}>Replay patch</button>
               <button className="fa-button fa-button--primary" type="button" disabled={!applyEligible || busy || (selected.source_apply_enabled && !selected.can_apply)} onClick={() => setConfirmation({ action: 'apply', task: selected })}>Apply Changes</button>
               <button className="fa-button fa-button--danger" type="button" disabled={!idle || !workspaceAvailable || busy} onClick={() => setConfirmation({ action: 'discard', task: selected })}>Discard Changes</button>
+              <button className="fa-button fa-button--danger" type="button" disabled={!idle || busy} onClick={() => setConfirmation({ action: 'deleteHistory', task: selected })}>Удалить из истории</button>
             </div>
             <p className="fa-caption">Re-run Task: новый запуск модели с сохранённой базой и параметрами. Replay patch: точный сохранённый патч в новой рабочей копии, без нового решения модели.</p>
             {!selected.source_apply_enabled && <div className="fa-host-notice"><strong>Применение к исходникам отключено (read-only Docker).</strong><p>Apply Changes запросит подтверждение и покажет ответ сервера. Для применения проверьте точный приватный артефакт на доверенном хосте; включать <code>AI_HELPER_FILE_AGENT_ALLOW_SOURCE_APPLY=true</code> можно только с writable checkout. Preview не подходит для точного применения.</p></div>}

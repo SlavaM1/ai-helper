@@ -106,6 +106,161 @@ def test_history_timestamps_preserve_utc_for_browser_duration(env):
 
 
 @async_test
+async def test_stop_queued_task_before_it_starts_and_confirm_history_delete(env):
+    svc, provider, client, source = env
+    task = svc._insert("Queued stop", "test-model", git(source, "rev-parse", "HEAD"), svc.parameters())
+    await svc.semaphore.acquire()
+    try:
+        svc.start(task.id)
+        job = svc.task_jobs[task.id]
+        response = await client.post(f"/api/file-agent/tasks/{task.id}/stop", json={})
+        assert response.status_code == 202
+        await asyncio.gather(job, return_exceptions=True)
+    finally:
+        svc.semaphore.release()
+    stopped = (await client.get(f"/api/file-agent/tasks/{task.id}")).json()
+    assert stopped["status"] == "cancelled" and not stopped["workspace"]
+    assert not provider.messages
+    assert (await client.post(f"/api/file-agent/tasks/{task.id}/stop", json={})).json()["status"] == "cancelled"
+    assert (await client.request("DELETE", f"/api/file-agent/tasks/{task.id}", json={"confirmed": False})).status_code == 422
+    assert (await client.request("DELETE", f"/api/file-agent/tasks/{task.id}", json={"confirmed": True})).status_code == 204
+    assert (await client.get(f"/api/file-agent/tasks/{task.id}")).status_code == 404
+    assert (await client.get(f"/api/file-agent/tasks/{task.id}/events")).status_code == 404
+    assert not (await client.get("/api/file-agent/tasks")).json()
+    # Restart does not restore logically deleted entries; internal snapshot metadata remains.
+    svc.recover()
+    assert not svc.history()
+    assert svc.require(task.id, include_hidden=True).parameters["history_deleted"]
+
+
+@async_test
+async def test_stop_running_provider_preserves_partial_workspace_without_further_calls(env):
+    svc, provider, client, source = env
+    waiting = asyncio.Event()
+    cancelled = asyncio.Event()
+    original = provider.complete_json
+    provider.actions = [
+        {"tool": "file_read", "arguments": {"path": "README.md"}},
+        {"tool": "file_create", "arguments": {"path": "docs/partial.md", "content": "# Partial\n\nRetained.\n"}},
+    ]
+    calls = 0
+
+    async def paused(messages, **kwargs):
+        nonlocal calls
+        calls += 1
+        if calls <= 2:
+            return await original(messages, **kwargs)
+        waiting.set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            cancelled.set()
+
+    provider.complete_json = paused
+    created = (await client.post("/api/file-agent/tasks", json={"prompt": "Write docs"})).json()
+    await asyncio.wait_for(waiting.wait(), 60)
+    path = f"/api/file-agent/tasks/{created['id']}"
+    assert (await client.request("DELETE", path, json={"confirmed": True})).status_code == 409
+    assert (await client.post(path + "/stop", json={})).status_code == 202
+    task = await finish(svc, created["id"])
+    assert cancelled.is_set() and calls == 3
+    assert svc.serialize(task)["status"] == "cancelled"
+    assert not task.validation["ok"]
+    assert (Path(task.workspace["path"]) / "docs/partial.md").exists()
+    assert Path(task.workspace["artifact"]["patch_path"]).exists()
+    assert not (source / "docs/partial.md").exists()
+    assert (await client.post(path + "/apply", json={"confirmed": True, "artifact_sha256": task.workspace["artifact"]["sha256"]})).status_code == 409
+    provider.complete_json = original
+    provider.actions = edit_actions()
+    rerun = (await client.post(path + "/rerun", json={})).json()
+    repeated = await finish(svc, rerun["id"])
+    assert repeated.status == "completed" and not repeated.parameters.get("cancel_requested")
+    discarded = await client.post(path + "/discard", json={"confirmed": True})
+    assert discarded.json()["status"] == "discarded"
+
+
+@async_test
+async def test_history_delete_preserves_parent_snapshot_for_queued_child(env):
+    svc, provider, client, source = env
+    provider.actions = edit_actions()
+    parent = await svc.create("Edit docs")
+    original = await finish(svc, parent["id"])
+    await svc.semaphore.acquire()
+    try:
+        provider.actions = edit_actions()
+        child = await svc.rerun(original.id)
+        deleted = await client.request("DELETE", f"/api/file-agent/tasks/{original.id}", json={"confirmed": True})
+        assert deleted.status_code == 204
+        assert Path(original.workspace["path"]).exists()
+        assert Path(original.workspace["artifact"]["patch_path"]).exists()
+    finally:
+        svc.semaphore.release()
+    result = await finish(svc, child["id"])
+    assert result.status == "completed", result.error
+    assert (await client.get(f"/api/file-agent/tasks/{original.id}/diff")).status_code == 404
+    assert all(item["id"] != original.id for item in svc.history())
+    assert (source / "README.md").read_text() == "# Project\n\nOriginal.\n"
+
+
+@async_test
+async def test_stop_during_workspace_creation_waits_for_writer(env, monkeypatch):
+    import threading
+
+    from app.file_agent.workspace import WorkspaceManager
+
+    svc, provider, client, _ = env
+    started, release = threading.Event(), threading.Event()
+    create = WorkspaceManager.create
+
+    def delayed(manager, *args, **kwargs):
+        started.set()
+        assert release.wait(10)
+        return create(manager, *args, **kwargs)
+
+    monkeypatch.setattr(WorkspaceManager, "create", delayed)
+    task = await svc.create("Stop while preparing")
+    try:
+        assert await asyncio.to_thread(started.wait, 10)
+        response = await client.post(f"/api/file-agent/tasks/{task['id']}/stop", json={})
+        assert response.json()["status"] == "stopping"
+        assert task["id"] in svc.task_jobs
+        assert (await client.request("DELETE", f"/api/file-agent/tasks/{task['id']}", json={"confirmed": True})).status_code == 409
+    finally:
+        release.set()
+    result = await finish(svc, task["id"])
+    assert svc.serialize(result)["status"] == "cancelled"
+    assert Path(result.workspace["path"]).is_dir()
+    assert not provider.messages
+
+
+@async_test
+async def test_stop_is_honoured_when_mcp_wraps_cancellation_as_tool_error(env, monkeypatch):
+    from app.mcp_tools import GitMcpClient
+
+    svc, provider, client, _ = env
+    waiting = asyncio.Event()
+    call = GitMcpClient.call
+
+    async def wrapped(mcp, name, arguments=None):
+        if name == "file_read":
+            waiting.set()
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                raise RuntimeError("Transport wrapped cancellation") from None
+        return await call(mcp, name, arguments)
+
+    monkeypatch.setattr(GitMcpClient, "call", wrapped)
+    provider.actions = [{"tool": "file_read", "arguments": {"path": "README.md"}}, {"result": "Must not run"}]
+    task = await svc.create("Stop tool call")
+    await asyncio.wait_for(waiting.wait(), 60)
+    await client.post(f"/api/file-agent/tasks/{task['id']}/stop", json={})
+    stopped = await finish(svc, task["id"])
+    assert svc.serialize(stopped)["status"] == "cancelled"
+    assert len(provider.messages) == 1
+
+
+@async_test
 async def test_real_mcp_edit_history_sse_rerun_replay_discard_and_apply(env):
     svc, provider, client, source = env
     provider.actions = edit_actions()

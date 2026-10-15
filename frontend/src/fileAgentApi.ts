@@ -15,4 +15,6 @@ export const fileAgentApi = {
   replay: (id: string, signal?: AbortSignal) => request<FileAgentTask>(`${taskPath(id)}/replay`, post({}, signal)),
   apply: (id: string, artifactSha: string, signal?: AbortSignal) => request<FileAgentTask>(`${taskPath(id)}/apply`, post({ confirmed: true, artifact_sha256: artifactSha }, signal)),
   discard: (id: string, signal?: AbortSignal) => request<FileAgentTask>(`${taskPath(id)}/discard`, post({ confirmed: true }, signal)),
+  stop: (id: string, signal?: AbortSignal) => request<FileAgentTask>(`${taskPath(id)}/stop`, post({}, signal)),
+  deleteHistory: (id: string, signal?: AbortSignal) => request<void>(taskPath(id), { ...post({ confirmed: true }, signal), method: 'DELETE' }),
 }

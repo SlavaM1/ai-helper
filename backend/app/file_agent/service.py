@@ -36,14 +36,15 @@ class FileAgentService:
         self.sessions = session_factory
         self.semaphore = asyncio.Semaphore(1)
         self.jobs: set[asyncio.Task] = set()
+        self.task_jobs: dict[str, asyncio.Task] = {}
 
     def manager(self) -> WorkspaceManager:
         return WorkspaceManager(Path(self.settings.target_repo_path), Path(self.settings.file_agent_storage))
 
-    def require(self, task_id: str) -> FileAgentTask:
+    def require(self, task_id: str, *, include_hidden: bool = False) -> FileAgentTask:
         with self.sessions() as db:
             task = db.get(FileAgentTask, task_id)
-            if task is None:
+            if task is None or (task.parameters.get("history_deleted") and not include_hidden):
                 raise FileAgentError("Task not found.", 404)
             db.expunge(task)
             return task
@@ -58,9 +59,15 @@ class FileAgentService:
         artifact = task.workspace.get("artifact")
         if artifact:
             workspace["artifact"] = {key: value for key, value in artifact.items() if key not in {"patch_path", "metadata_path"}}
+        public_status = task.status
+        if task.parameters.get("cancel_requested"):
+            if task.status in ACTIVE:
+                public_status = "stopping"
+            elif task.status == "failed":
+                public_status = "cancelled"
         return {
             "id": task.id, "parent_id": task.parent_id, "prompt": redact_prompt(task.prompt),
-            "model": task.model, "status": task.status, "base_sha": task.base_sha,
+            "model": task.model, "status": public_status, "base_sha": task.base_sha,
             "workspace": workspace, "operations": task.operations, "read_files": task.read_files,
             "changes": task.changes, "usage": task.usage, "validation": task.validation,
             "parameters": task.parameters, "result": task.result, "error": task.error,
@@ -75,7 +82,9 @@ class FileAgentService:
 
     def history(self, limit: int = 50, offset: int = 0) -> list[dict]:
         with self.sessions() as db:
-            tasks = db.scalars(select(FileAgentTask).order_by(FileAgentTask.created_at.desc()).offset(offset).limit(limit)).all()
+            tasks = db.scalars(select(FileAgentTask).where(
+                FileAgentTask.parameters["history_deleted"].as_boolean().is_not(True)
+            ).order_by(FileAgentTask.created_at.desc()).offset(offset).limit(limit)).all()
             return [self.serialize(task) for task in tasks]
 
     def update(self, task_id: str, **fields: Any) -> None:
@@ -106,7 +115,8 @@ class FileAgentService:
             tasks = db.scalars(select(FileAgentTask).where(FileAgentTask.status.in_(ACTIVE))).all()
             for task in tasks:
                 task.status = "failed"
-                task.error = "Execution interrupted by server restart. Rerun from the saved base or replay an existing artifact."
+                task.error = ("Stopped by user." if task.parameters.get("cancel_requested") else
+                              "Execution interrupted by server restart. Rerun from the saved base or replay an existing artifact.")
                 task.finished_at = utc_now()
                 task.operations = [*task.operations, {"id": len(task.operations) + 1, "timestamp": utc_now().isoformat(),
                                    "phase": "recovery", "status": "error", "error": task.error}]
@@ -127,8 +137,10 @@ class FileAgentService:
     def _insert(self, prompt: str, model: str, base_sha: str, parameters: dict,
                 *, parent_id: str | None = None, mode: str = "run") -> FileAgentTask:
         with self.sessions() as db:
+            clean_parameters = {key: value for key, value in parameters.items()
+                                if key not in {"cancel_requested", "history_deleted"}}
             task = FileAgentTask(id=str(uuid.uuid4()), prompt=prompt, model=model, base_sha=base_sha,
-                                 parameters={**parameters, "mode": mode}, parent_id=parent_id)
+                                 parameters={**clean_parameters, "mode": mode}, parent_id=parent_id)
             db.add(task)
             db.commit()
             db.refresh(task)
@@ -149,7 +161,56 @@ class FileAgentService:
     def start(self, task_id: str) -> None:
         job = asyncio.create_task(self.execute(task_id))
         self.jobs.add(job)
-        job.add_done_callback(self.jobs.discard)
+        self.task_jobs[task_id] = job
+
+        def done(finished: asyncio.Task) -> None:
+            self.jobs.discard(finished)
+            self.task_jobs.pop(task_id, None)
+            # A queued coroutine may be cancelled before entering execute().
+            task = self.require(task_id, include_hidden=True)
+            if task.status in ACTIVE and task.parameters.get("cancel_requested"):
+                self._finish_cancel(task_id)
+            if not finished.cancelled():
+                finished.exception()  # Retrieve errors; never leak an unhandled task exception.
+
+        job.add_done_callback(done)
+
+    def _finish_cancel(self, task_id: str) -> None:
+        task = self.require(task_id, include_hidden=True)
+        self.update(task_id, status="failed", error="Stopped by user.", finished_at=utc_now(),
+                    validation={**task.validation, "ok": False, "complete": False, "cancelled": True})
+        self.emit(task_id, phase="finished", status="cancelled")
+
+    async def stop(self, task_id: str) -> dict:
+        task = self.require(task_id)
+        if task.status in ACTIVE and not task.parameters.get("cancel_requested"):
+            self.update(task_id, parameters={**task.parameters, "cancel_requested": True})
+            self.emit(task_id, phase="cancellation", status="requested")
+            job = self.task_jobs.get(task_id)
+            if job is not None and not job.done():
+                job.cancel()
+            else:
+                self._finish_cancel(task_id)
+        return self.serialize(self.require(task_id))
+
+    async def delete_history(self, task_id: str) -> None:
+        task = self.require(task_id)
+        self._idle(task)
+        if task_id in self.task_jobs:
+            raise FileAgentError("File agent is finishing an operation. Stop the task and retry after it finishes.")
+        # Logical deletion preserves snapshots referenced by existing child tasks.
+        # Public endpoints return 404; no source/workspace files are removed.
+        self.update(task_id, parameters={**task.parameters, "history_deleted": True})
+
+    @staticmethod
+    async def _workspace_thread(action, *args, **kwargs):
+        """Do not abandon a filesystem writer when its awaiting task is cancelled."""
+        worker = asyncio.create_task(asyncio.to_thread(action, *args, **kwargs))
+        try:
+            return await asyncio.shield(worker)
+        except asyncio.CancelledError:
+            await worker
+            raise
 
     async def close(self) -> None:
         jobs = list(self.jobs)
@@ -170,6 +231,7 @@ class FileAgentService:
                 "file_agent_timeout_seconds": task.parameters["timeout_seconds"],
             })
             agent = FileAgent(configured, self.llm, self.sessions, lambda **event: self.emit(task_id, **event))
+            agent.should_stop = lambda: bool(self.require(task_id, include_hidden=True).parameters.get("cancel_requested"))
             workspace = None
             failure = None
             result = None
@@ -180,12 +242,28 @@ class FileAgentService:
                     manager = self.manager()
 
                     async def prepare():
-                        if task.parameters.get("mode") == "replay":
-                            parent = self.require(task.parent_id)
-                            return await asyncio.to_thread(manager.replay, parent.workspace, task.id)
-                        parent = self.require(task.parent_id) if task.parent_id else None
-                        return await asyncio.to_thread(manager.create, task.id, task.base_sha,
-                                                       snapshot_workspace=parent.workspace if parent else None)
+                        nonlocal workspace
+                        # Capture ownership even if cancellation arrives during clone/replay.
+                        def create_workspace():
+                            if task.parameters.get("mode") == "replay":
+                                parent = self.require(task.parent_id, include_hidden=True)
+                                return manager.replay(parent.workspace, task.id)
+                            parent = self.require(task.parent_id, include_hidden=True) if task.parent_id else None
+                            return manager.create(task.id, task.base_sha,
+                                                  snapshot_workspace=parent.workspace if parent else None)
+
+                        async def capture():
+                            nonlocal workspace
+                            workspace = await asyncio.to_thread(create_workspace)
+                            self.update(task_id, workspace=workspace)
+                            return workspace
+
+                        worker = asyncio.create_task(capture())
+                        try:
+                            return await asyncio.shield(worker)
+                        except asyncio.CancelledError:
+                            await worker
+                            raise
 
                     workspace = await agent.operation("workspace_replay" if task.parameters.get("mode") == "replay" else "workspace_create", {}, prepare, phase="workspace")
                     self.update(task_id, workspace=workspace)
@@ -196,6 +274,17 @@ class FileAgentService:
                     self.update(task_id, result=result)
             except (Exception, asyncio.CancelledError) as exc:
                 failure = safe_error(exc)
+            if agent.should_stop():
+                if workspace:
+                    try:
+                        artifact = await self._workspace_thread(self.manager().save_artifact, workspace)
+                        self.update(task_id, changes=artifact["changes"],
+                                    workspace={**workspace, "state": "exported", "artifact": artifact})
+                    except Exception:
+                        self.emit(task_id, phase="artifact", status="error", error="Partial workspace retained; artifact export unavailable.")
+                self.update(task_id, usage=agent.usage)
+                self._finish_cancel(task_id)
+                return
             if workspace:
                 try:
                     final_deadline = time.monotonic() + reserve
@@ -206,6 +295,10 @@ class FileAgentService:
                 except (Exception, asyncio.CancelledError) as exc:
                     failure = failure or "Final validation/artifact export did not finish: " + safe_error(exc)
             final = self.require(task_id)
+            if final.parameters.get("cancel_requested"):
+                self.update(task_id, usage=agent.usage)
+                self._finish_cancel(task_id)
+                return
             if not final.validation.get("ok"):
                 failure = failure or "Final validation failed or was incomplete. Inspect diagnostics; source apply is blocked."
             self.update(task_id, status="failed" if failure else "completed", error=failure,
@@ -244,7 +337,7 @@ class FileAgentService:
         finally:
             # Preserve the exact private artifact even for an invalid/partial task.
             agent.deadline = final_deadline
-            artifact = await agent.operation("save_artifact", {}, lambda: asyncio.to_thread(self.manager().save_artifact, workspace), phase="artifact")
+            artifact = await agent.operation("save_artifact", {}, lambda: self._workspace_thread(self.manager().save_artifact, workspace), phase="artifact")
             self.update(task_id, workspace={**workspace, "state": "exported", "artifact": artifact},
                         **({} if diff_ok else {"changes": artifact["changes"]}))
 

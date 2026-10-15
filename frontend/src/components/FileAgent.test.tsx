@@ -8,6 +8,7 @@ import { FileAgent } from './FileAgent'
 vi.mock('../fileAgentApi', () => ({ fileAgentApi: {
   history: vi.fn(), task: vi.fn(), create: vi.fn(), diff: vi.fn(), file: vi.fn(),
   rerun: vi.fn(), replay: vi.fn(), apply: vi.fn(), discard: vi.fn(),
+  stop: vi.fn(), deleteHistory: vi.fn(),
 } }))
 
 const task: FileAgentTask = {
@@ -44,13 +45,62 @@ beforeEach(() => {
   vi.mocked(fileAgentApi.replay).mockResolvedValue({ ...task, id: 'replay-task', parent_id: 'rerun-task' })
   vi.mocked(fileAgentApi.apply).mockRejectedValue(new Error('Source apply is disabled (read-only Docker checkout).'))
   vi.mocked(fileAgentApi.discard).mockResolvedValue({ ...task, status: 'discarded', updated_at: '2026-10-15T10:00:20Z' })
+  vi.mocked(fileAgentApi.stop).mockResolvedValue({ ...task, status: 'cancelled', updated_at: '2026-10-15T10:00:20Z' })
+  vi.mocked(fileAgentApi.deleteHistory).mockResolvedValue(undefined)
 })
 
 afterEach(() => { vi.useRealTimers() })
 
 describe('FileAgent', () => {
+  it('stops an active task and deletes it from history only after confirmation', async () => {
+    const running = { ...task, status: 'running', finished_at: null }
+    vi.mocked(fileAgentApi.history).mockResolvedValue([running])
+    vi.mocked(fileAgentApi.task).mockResolvedValue(running)
+    render(<FileAgent {...props} />)
+    await screen.findByRole('button', { name: 'Остановить' })
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Остановить' })).toBeEnabled())
+    expect(screen.getByRole('button', { name: 'Удалить из истории' })).toBeDisabled()
+    const stopped = { ...task, status: 'cancelled', updated_at: '2026-10-15T10:00:20Z' }
+    vi.mocked(fileAgentApi.history).mockResolvedValue([stopped])
+    await userEvent.click(screen.getByRole('button', { name: 'Остановить' }))
+    expect(fileAgentApi.stop).toHaveBeenCalledWith(task.id, expect.any(AbortSignal))
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Удалить из истории' })).toBeEnabled())
+    await userEvent.click(screen.getByRole('button', { name: 'Удалить из истории' }))
+    expect(fileAgentApi.deleteHistory).not.toHaveBeenCalled()
+    expect(within(screen.getByRole('dialog')).getByText(/служебная запись в SQLite сохранятся/)).toBeInTheDocument()
+    await userEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Отмена' }))
+    expect(fileAgentApi.deleteHistory).not.toHaveBeenCalled()
+    await userEvent.click(screen.getByRole('button', { name: 'Удалить из истории' }))
+    vi.mocked(fileAgentApi.history).mockResolvedValue([])
+    await userEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Удалить из истории' }))
+    expect(fileAgentApi.deleteHistory).toHaveBeenCalledWith(task.id, expect.any(AbortSignal))
+    expect(await screen.findByText('Задача удалена из истории. Файлы проекта не изменены.')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Re-run Task' })).not.toBeInTheDocument()
+    expect(await screen.findByText(/История пуста/)).toBeInTheDocument()
+  })
+
+  it('keeps polling a stopping task and prevents repeated stop or premature deletion', async () => {
+    const stopping = { ...task, status: 'stopping', finished_at: null }
+    vi.mocked(fileAgentApi.history).mockResolvedValue([stopping])
+    vi.mocked(fileAgentApi.task).mockResolvedValue(stopping)
+    render(<FileAgent {...props} />)
+    expect(await screen.findByRole('button', { name: 'Останавливается…' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: 'Удалить из истории' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: 'Re-run Task' })).toBeDisabled()
+  })
+
   it('runs a suggested task with the chosen model, then re-runs and replays through separate APIs', async () => {
     vi.mocked(fileAgentApi.history).mockResolvedValue([])
+    vi.mocked(fileAgentApi.create).mockImplementationOnce(async () => {
+      const created = { ...task, id: 'created-task' }
+      vi.mocked(fileAgentApi.history).mockResolvedValue([created])
+      return created
+    })
+    vi.mocked(fileAgentApi.rerun).mockImplementationOnce(async () => {
+      const repeated = { ...task, id: 'rerun-task', parent_id: 'created-task' }
+      vi.mocked(fileAgentApi.history).mockResolvedValue([repeated, { ...task, id: 'created-task' }])
+      return repeated
+    })
     render(<FileAgent {...props} />)
     await screen.findByText(/История пуста/)
     await userEvent.click(screen.getByText('Примеры задач'))

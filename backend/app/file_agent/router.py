@@ -163,7 +163,13 @@ async def events(task_id: str, request: Request, svc: Service, after: int = Quer
         cursor = after
         heartbeats = 0
         while not await request.is_disconnected():
-            item = svc.require(task_id)
+            try:
+                item = svc.require(task_id)
+            except FileAgentError as exc:
+                if exc.status == 404:
+                    yield 'event: deleted\ndata: {}\n\n'
+                    return
+                raise
             for event in item.operations:
                 if event["id"] > cursor:
                     cursor = event["id"]
@@ -210,5 +216,22 @@ async def apply(task_id: str, data: ApplyRequest, svc: Service):
 async def discard(task_id: str, data: ConfirmRequest, svc: Service):
     try:
         return await svc.lifecycle(task_id, "discard")
+    except Exception as exc:
+        raise fail(exc) from None
+
+
+@router.post("/tasks/{task_id}/stop", status_code=202, dependencies=Mutation)
+async def stop(task_id: str, data: EmptyRequest, svc: Service):
+    try:
+        return await svc.stop(task_id)
+    except Exception as exc:
+        raise fail(exc) from None
+
+
+@router.delete("/tasks/{task_id}", status_code=204, dependencies=Mutation)
+async def delete_history(task_id: str, data: ConfirmRequest, svc: Service):
+    try:
+        await svc.delete_history(task_id)
+        return Response(status_code=204)
     except Exception as exc:
         raise fail(exc) from None

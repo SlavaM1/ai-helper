@@ -281,3 +281,17 @@ Workspace находятся в `/data/file-agent/<workspace-id>` контейн
 - Docker test runner первоначально отказал в исполнении `pip` script из noexec tmpfs; исправлен только test invocation (`python -m pip`). Runtime-защита не ослаблялась; итоговый Docker pytest 112/112.
 
 Final commit SHA указывается в delivery response после commit/push, чтобы не создавать самоссылочный Git object. Runtime-конфигурация для текущего развёртывания сохранена в приватном `/tmp/opencode/day34-compose.env` (0600), не в Git; для обычного запуска настройте локальный `.env` по `.env.example`.
+
+## Мини-доработка: остановка и удаление истории
+
+По запросу пользователя сначала остановлены три задачи анализа REST-контроллеров: `133c1fbf-a05d-4979-b983-44943e924d11` (running), `21835554-7d37-4dec-91f0-fbdd086f0fff` и `83c78fda-f826-4332-ab1b-523c4efafbf8` (queued). Поскольку в предыдущей версии ещё не было отмены, выполнена краткая остановка backend; записи сохранены с причиной пользовательской остановки, сервис восстановлен. Финальная проверка API: все три `cancelled`, активных задач нет. Их история автоматически не удалялась.
+
+- Добавлены `POST /api/file-agent/tasks/{id}/stop` и подтверждаемый `DELETE /api/file-agent/tasks/{id}`; действуют existing origin/JSON checks.
+- Orchestrator хранит привязку ID → async job. Остановка охватывает queued/running, предотвращает последующие LLM/tool calls даже при обёртывании CancelledError MCP transport-ом. Начатый filesystem writer не бросается в фоне: UI показывает `stopping`, затем `cancelled`; partial workspace и доступный artifact сохраняются, Apply блокируется.
+- Re-run не наследует cancel/history flags. Cancelled task можно отдельно Discard; после этого публичный статус корректно становится `discarded`.
+- Удаление из истории логическое: запись не возвращается в списке, публичные detail/diff/file/events endpoints дают 404. SQLite metadata и snapshots сохраняются для queued/existing дочерних rerun/replay; workspace/source не удаляются. Диалог подтверждения прямо объясняет это. Активную/останавливающуюся задачу сначала нужно остановить; для удаления рабочей копии есть отдельный Discard.
+- SQLite schema не менялась: флаги находятся в JSON parameters, terminal storage status отменённой задачи — `failed`, публичный — `cancelled`. Это совместимо с существующим CHECK constraint без перестройки данных.
+- Frontend: рабочие кнопки **Остановить** и **Удалить из истории**, состояния «Останавливается»/«Остановлена», блокировка повторного stop и преждевременного удаления, защита от возвращения удалённой записи при refresh/polling.
+- Проверки после доработки: **117 backend tests passed**, включая Docker Python 3.12; **25 frontend tests passed**; Ruff, typecheck и production build passed. Новые тесты покрывают queued/running stop, partial writes, clone cancellation, wrapped MCP cancellation, rerun и удаление родителя перед выполнением дочерней задачи.
+- Browser smoke без платных LLM calls на отдельной QA-записи: stop → cancelled, подтверждение delete → 204, после reload записи нет, публичный GET → 404, JS errors 0. Screenshot: `/tmp/opencode/day34-stop-button.png`.
+- Backend/frontend пересобраны и healthy, UI прежний: `http://localhost:3010`. Исходный `aurelSpa` остаётся чистым; пользовательские workspace/артефакты не удалялись.

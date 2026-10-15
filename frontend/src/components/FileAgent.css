@@ -24,6 +24,7 @@
 .fa-status { color: var(--muted); font-size: 10px; }
 .fa-status--running, .fa-status--completed, .fa-status--applied { color: var(--cyan); }
 .fa-status--failed { color: var(--danger); }
+.fa-status--stopping, .fa-status--cancelled { color: var(--muted); }
 .fa-main { min-width: 0; min-height: 0; overflow-y: auto; }
 .fa-compose { padding: 20px 22px 15px; border-bottom: 1px solid var(--line); }
 .fa-compose > label { display: block; margin-bottom: 9px; font-size: 12px; font-weight: 600; }
